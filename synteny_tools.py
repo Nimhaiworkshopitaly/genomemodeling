@@ -211,6 +211,7 @@ def findSimBlocks(genome1, genome2):
 def findSyntenyReal2(genome1, genome2):
     genome1size = len(genome1)
     genome2size = len(genome2)
+    max_block_len = min(genome1size, genome2size)
     # block = []
     blocks = []
 
@@ -268,7 +269,8 @@ def findSyntenyReal2(genome1, genome2):
             for j in cand_js:
                 length = 1
                 # extend forward
-                while (genome1[(i+length) % genome1size] != -1 and
+                while (length < max_block_len and
+                    genome1[(i+length) % genome1size] != -1 and
                     genome1[(i+length) % genome1size] == genome2[(j+length) % genome2size]):
                     length += 1
                 if length > longestBlockLength:
@@ -284,7 +286,7 @@ def findSyntenyReal2(genome1, genome2):
                     continue
                 length = 1
                 # extend backward on genome2
-                while (length < genome1size and
+                while (length < max_block_len and
                     genome1[(i+length) % genome1size] != -1 and
                     genome1[(i+length) % genome1size] == genome2[(j-length) % genome2size]):
                     length += 1
