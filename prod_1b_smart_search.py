@@ -538,7 +538,7 @@ if __name__ == "__main__":
     # the search has found a promising region.
     run_smart_search_2d(
         atgc_dir="ATGC0070",
-        n_runs=100,
+        n_runs=5,
         seed=42,
         maxiter=12,
         popsize=8,
