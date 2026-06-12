@@ -18,6 +18,7 @@ import os
 import random
 import re
 from collections import Counter, defaultdict
+from multiprocessing import Pool
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -39,6 +40,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rt", type=float, required=True, help="Translocation rate.")
     parser.add_argument("--inv-rate", type=float, default=0.0)
     parser.add_argument("--n-runs", type=int, default=100)
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Number of worker processes used to split n-runs.",
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--huge-exp", type=float, default=1e9)
     parser.add_argument("--out-dir", default="per_pair_synteny_fit")
@@ -49,6 +56,13 @@ def parse_args() -> argparse.Namespace:
         help="Also write one CDF plot per genome pair.",
     )
     return parser.parse_args()
+
+
+def split_counts(total: int, chunks: int) -> list[int]:
+    chunks = max(1, min(chunks, total))
+    base = total // chunks
+    rem = total % chunks
+    return [base + (1 if i < rem else 0) for i in range(chunks)]
 
 
 def safe_name(text: str) -> str:
@@ -74,11 +88,12 @@ def freq_to_arrays(freq: dict[int, float]) -> tuple[np.ndarray, np.ndarray]:
     return vals, probs
 
 
-def simulate_pair_counts(args: argparse.Namespace, tree, root_genome) -> dict[tuple[str, str], Counter]:
-    rng = np.random.default_rng(args.seed)
+def simulate_pair_counts_worker(payload) -> dict[tuple[str, str], Counter]:
+    tree, root_genome, rf, rt, inv_rate, huge_exp, n_runs, seed = payload
+    rng = np.random.default_rng(seed)
     pooled_counts = defaultdict(Counter)
 
-    for run_idx in range(args.n_runs):
+    for _ in range(n_runs):
         child_seed = int(rng.integers(0, 2**32 - 1))
         random.seed(child_seed)
         np.random.seed(child_seed)
@@ -86,24 +101,55 @@ def simulate_pair_counts(args: argparse.Namespace, tree, root_genome) -> dict[tu
         sim_pairs = run_simulation(
             tree,
             root_genome,
-            per_gene_gain_rate=args.rf,
-            per_gene_loss_rate=args.rf,
-            per_gene_inv_rate=args.inv_rate,
-            per_gene_trans_rate=args.rt,
-            gain_exp=args.huge_exp,
-            loss_exp=args.huge_exp,
-            inv_exp=args.huge_exp,
-            trans_exp=args.huge_exp,
+            per_gene_gain_rate=rf,
+            per_gene_loss_rate=rf,
+            per_gene_inv_rate=inv_rate,
+            per_gene_trans_rate=rt,
+            gain_exp=huge_exp,
+            loss_exp=huge_exp,
+            inv_exp=huge_exp,
+            trans_exp=huge_exp,
         )
 
         for (a, b), lengths in sim_pairs.items():
             pair = (a, b) if a <= b else (b, a)
             pooled_counts[pair].update(int(x) for x in lengths)
 
-        if (run_idx + 1) % 10 == 0 or run_idx + 1 == args.n_runs:
-            print(f"completed {run_idx + 1}/{args.n_runs} simulations")
-
     return pooled_counts
+
+
+def merge_pair_counts(partials) -> dict[tuple[str, str], Counter]:
+    merged = defaultdict(Counter)
+    for partial in partials:
+        for pair, counter in partial.items():
+            merged[pair].update(counter)
+    return merged
+
+
+def simulate_pair_counts(args: argparse.Namespace, tree, root_genome) -> dict[tuple[str, str], Counter]:
+    run_counts = split_counts(args.n_runs, args.workers)
+    seed_rng = np.random.default_rng(args.seed)
+    payloads = []
+    for n in run_counts:
+        worker_seed = int(seed_rng.integers(0, 2**32 - 1))
+        payloads.append((
+            tree,
+            root_genome,
+            args.rf,
+            args.rt,
+            args.inv_rate,
+            args.huge_exp,
+            n,
+            worker_seed,
+        ))
+
+    print(f"running {args.n_runs} simulations across {len(payloads)} worker(s)")
+    if len(payloads) == 1:
+        return simulate_pair_counts_worker(payloads[0])
+
+    with Pool(processes=len(payloads)) as pool:
+        partials = pool.map(simulate_pair_counts_worker, payloads)
+    return merge_pair_counts(partials)
 
 
 def write_pair_csv(path: str, real_freq: dict[int, float], sim_freq: dict[int, float]) -> None:
