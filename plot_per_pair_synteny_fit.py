@@ -279,7 +279,7 @@ def main() -> None:
             "w1": w1,
             "real_singleton_frequency": real_freq.get(1, 0.0),
             "simulated_singleton_frequency": sim_freq.get(1, 0.0),
-            "real_n_lengths": int(real_probs.sum() > 0),
+            "real_n_lengths": int(len(real_vals)),
             "simulated_n_blocks": int(sum(sim_counts.get(pair, Counter()).values())),
             "csv": csv_path,
             "png": png_path,
