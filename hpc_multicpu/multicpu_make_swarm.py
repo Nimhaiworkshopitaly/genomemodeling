@@ -23,6 +23,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--points", type=int, default=21)
     parser.add_argument("--n-runs", type=int, default=100)
     parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--core-fraction", type=float, default=0.5)
+    parser.add_argument("--core-protection", type=float, default=0.9)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--seed-stride", type=int, default=1000)
     parser.add_argument("--python", default="python")
@@ -66,6 +68,8 @@ def main() -> None:
                 "--rt", f"{rt:.12g}",
                 "--n-runs", str(args.n_runs),
                 "--workers", str(args.workers),
+                "--core-fraction", f"{args.core_fraction:.12g}",
+                "--core-protection", f"{args.core_protection:.12g}",
                 "--seed", str(job_seed),
                 "--out-csv", out_csv,
             ]
