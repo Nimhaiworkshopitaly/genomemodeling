@@ -114,12 +114,62 @@ def _pmf_tail_at(vals, probs, min_length):
     return float(probs[vals >= min_length].sum())
 
 
+def _aligned_smoothed_probs(r_vals, r_probs, s_vals, s_probs, epsilon=1e-12):
+    support = np.array(sorted(set(r_vals.tolist()) | set(s_vals.tolist())), dtype=int)
+    if support.size == 0:
+        return np.array([], dtype=float), np.array([], dtype=float)
+    r_map = {int(v): float(p) for v, p in zip(r_vals, r_probs)}
+    s_map = {int(v): float(p) for v, p in zip(s_vals, s_probs)}
+    p = np.fromiter((r_map.get(int(v), 0.0) for v in support), dtype=float)
+    q = np.fromiter((s_map.get(int(v), 0.0) for v in support), dtype=float)
+    p = p + epsilon
+    q = q + epsilon
+    p = p / p.sum()
+    q = q / q.sum()
+    return p, q
+
+
+def _distribution_distances(r_vals, r_probs, s_vals, s_probs, epsilon=1e-12):
+    p, q = _aligned_smoothed_probs(r_vals, r_probs, s_vals, s_probs, epsilon=epsilon)
+    if p.size == 0:
+        return {
+            "kl_real_to_sim": float("nan"),
+            "kl_sim_to_real": float("nan"),
+            "js_divergence": float("nan"),
+            "bhattacharyya_coefficient": float("nan"),
+            "bhattacharyya_distance": float("nan"),
+            "hellinger_distance": float("nan"),
+        }
+
+    kl_real_to_sim = float(np.sum(p * np.log(p / q)))
+    kl_sim_to_real = float(np.sum(q * np.log(q / p)))
+    m = 0.5 * (p + q)
+    js_divergence = float(
+        0.5 * np.sum(p * np.log(p / m))
+        + 0.5 * np.sum(q * np.log(q / m))
+    )
+    bc = float(np.sum(np.sqrt(p * q)))
+    bc = min(1.0, max(0.0, bc))
+    bhattacharyya_distance = float(-np.log(max(bc, epsilon)))
+    hellinger_distance = float(np.sqrt(max(0.0, 1.0 - bc)))
+
+    return {
+        "kl_real_to_sim": kl_real_to_sim,
+        "kl_sim_to_real": kl_sim_to_real,
+        "js_divergence": js_divergence,
+        "bhattacharyya_coefficient": bc,
+        "bhattacharyya_distance": bhattacharyya_distance,
+        "hellinger_distance": hellinger_distance,
+    }
+
+
 def score_real_vs_sim_counts(
     real_pmfs,
     pooled_sim_counts,
     composite_weights=None,
     short_cdf_length=10,
     long_tail_length=50,
+    smoothing_epsilon=1e-12,
 ):
     """
     Compare real per-pair SBL PMFs to pooled simulated per-pair SBL counts.
@@ -136,6 +186,12 @@ def score_real_vs_sim_counts(
     total_singleton_abs_error = 0.0
     total_short_cdf_abs_error = 0.0
     total_long_tail_abs_error = 0.0
+    total_kl_real_to_sim = 0.0
+    total_kl_sim_to_real = 0.0
+    total_js_divergence = 0.0
+    total_bhattacharyya_coefficient = 0.0
+    total_bhattacharyya_distance = 0.0
+    total_hellinger_distance = 0.0
     compared = 0
     skipped_real = 0
     skipped_sim = 0
@@ -169,6 +225,19 @@ def score_real_vs_sim_counts(
             _pmf_tail_at(r_vals, r_probs, long_tail_length)
             - _pmf_tail_at(s_vals, s_probs, long_tail_length)
         )
+        extra_distances = _distribution_distances(
+            r_vals,
+            r_probs,
+            s_vals,
+            s_probs,
+            epsilon=smoothing_epsilon,
+        )
+        total_kl_real_to_sim += extra_distances["kl_real_to_sim"]
+        total_kl_sim_to_real += extra_distances["kl_sim_to_real"]
+        total_js_divergence += extra_distances["js_divergence"]
+        total_bhattacharyya_coefficient += extra_distances["bhattacharyya_coefficient"]
+        total_bhattacharyya_distance += extra_distances["bhattacharyya_distance"]
+        total_hellinger_distance += extra_distances["hellinger_distance"]
         compared += 1
 
     avg_w1 = (total_w1 / compared) if compared > 0 else float("nan")
@@ -187,6 +256,18 @@ def score_real_vs_sim_counts(
         + weights["short_cdf"] * avg_short_cdf_abs_error
         + weights["long_tail"] * avg_long_tail_abs_error
     )
+    avg_kl_real_to_sim = total_kl_real_to_sim / compared if compared > 0 else float("nan")
+    avg_kl_sim_to_real = total_kl_sim_to_real / compared if compared > 0 else float("nan")
+    avg_js_divergence = total_js_divergence / compared if compared > 0 else float("nan")
+    avg_bhattacharyya_coefficient = (
+        total_bhattacharyya_coefficient / compared if compared > 0 else float("nan")
+    )
+    avg_bhattacharyya_distance = (
+        total_bhattacharyya_distance / compared if compared > 0 else float("nan")
+    )
+    avg_hellinger_distance = (
+        total_hellinger_distance / compared if compared > 0 else float("nan")
+    )
 
     return {
         "sum_w1": total_w1,
@@ -198,6 +279,13 @@ def score_real_vs_sim_counts(
         "avg_short_cdf_abs_error": avg_short_cdf_abs_error,
         "avg_long_tail_abs_error": avg_long_tail_abs_error,
         "composite_score": composite_score,
+        "avg_kl_real_to_sim": avg_kl_real_to_sim,
+        "avg_kl_sim_to_real": avg_kl_sim_to_real,
+        "avg_js_divergence": avg_js_divergence,
+        "avg_bhattacharyya_coefficient": avg_bhattacharyya_coefficient,
+        "avg_bhattacharyya_distance": avg_bhattacharyya_distance,
+        "avg_hellinger_distance": avg_hellinger_distance,
+        "distribution_smoothing_epsilon": smoothing_epsilon,
         "short_cdf_length": short_cdf_length,
         "long_tail_length": long_tail_length,
         "composite_w_w1": weights["w1"],
