@@ -17,7 +17,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--sort-by",
         default="composite_score",
-        choices=["composite_score", "avg_w1", "sum_w1"],
+        choices=[
+            "composite_score",
+            "avg_w1",
+            "sum_w1",
+            "avg_kl_real_to_sim",
+            "avg_kl_sim_to_real",
+            "avg_js_divergence",
+            "avg_bhattacharyya_coefficient",
+            "avg_bhattacharyya_distance",
+            "avg_hellinger_distance",
+        ],
     )
     parser.add_argument("--top", type=int, default=20)
     return parser.parse_args()
@@ -56,7 +66,8 @@ def main() -> None:
             "Use --sort-by avg_w1 for old result files, or rerun jobs with the composite scorer."
         )
     combined[args.sort_by] = pd.to_numeric(combined[args.sort_by], errors="coerce")
-    combined = combined.sort_values(args.sort_by, ascending=True)
+    ascending = args.sort_by != "avg_bhattacharyya_coefficient"
+    combined = combined.sort_values(args.sort_by, ascending=ascending)
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out_csv)), exist_ok=True)
     combined.to_csv(args.out_csv, index=False)
@@ -64,9 +75,13 @@ def main() -> None:
     cols = [
         "rf", "rt", "n_runs", "workers", "core_fraction", "core_protection",
         "terminal_rate_multiplier", "internal_rate_multiplier",
+        "use_depth_dependent_gain_loss", "depth_gain_loss_scale", "depth_gain_loss_decay",
         "composite_score", "avg_w1", "sum_w1",
         "avg_singleton_abs_error", "avg_short_cdf_abs_error",
-        "avg_long_tail_abs_error", "n_pairs", "seed",
+        "avg_long_tail_abs_error",
+        "avg_kl_real_to_sim", "avg_kl_sim_to_real", "avg_js_divergence",
+        "avg_bhattacharyya_coefficient", "avg_bhattacharyya_distance",
+        "avg_hellinger_distance", "n_pairs", "seed",
     ]
     visible_cols = [col for col in cols if col in combined.columns]
     print(f"wrote {len(combined)} rows to {args.out_csv}")
