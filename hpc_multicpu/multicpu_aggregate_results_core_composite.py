@@ -27,6 +27,8 @@ def parse_args() -> argparse.Namespace:
             "avg_bhattacharyya_coefficient",
             "avg_bhattacharyya_distance",
             "avg_hellinger_distance",
+            "avg_ks_statistic",
+            "avg_kuiper_statistic",
         ],
     )
     parser.add_argument("--top", type=int, default=20)
@@ -79,7 +81,8 @@ def main() -> None:
         "avg_long_tail_abs_error",
         "avg_kl_real_to_sim", "avg_kl_sim_to_real", "avg_js_divergence",
         "avg_bhattacharyya_coefficient", "avg_bhattacharyya_distance",
-        "avg_hellinger_distance", "n_pairs", "seed",
+        "avg_hellinger_distance", "avg_ks_statistic", "avg_kuiper_statistic",
+        "n_pairs", "seed",
     ]
     visible_cols = [col for col in cols if col in combined.columns]
     print(f"wrote {len(combined)} rows to {args.out_csv}")
