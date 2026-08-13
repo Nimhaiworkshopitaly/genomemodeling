@@ -129,6 +129,17 @@ def _aligned_smoothed_probs(r_vals, r_probs, s_vals, s_probs, epsilon=1e-12):
     return p, q
 
 
+def _aligned_cdf_differences(r_vals, r_probs, s_vals, s_probs):
+    support = np.array(sorted(set(r_vals.tolist()) | set(s_vals.tolist())), dtype=int)
+    if support.size == 0:
+        return np.array([], dtype=float)
+    r_map = {int(v): float(p) for v, p in zip(r_vals, r_probs)}
+    s_map = {int(v): float(p) for v, p in zip(s_vals, s_probs)}
+    r_cdf = np.cumsum(np.fromiter((r_map.get(int(v), 0.0) for v in support), dtype=float))
+    s_cdf = np.cumsum(np.fromiter((s_map.get(int(v), 0.0) for v in support), dtype=float))
+    return r_cdf - s_cdf
+
+
 def _distribution_distances(r_vals, r_probs, s_vals, s_probs, epsilon=1e-12):
     p, q = _aligned_smoothed_probs(r_vals, r_probs, s_vals, s_probs, epsilon=epsilon)
     if p.size == 0:
@@ -139,6 +150,8 @@ def _distribution_distances(r_vals, r_probs, s_vals, s_probs, epsilon=1e-12):
             "bhattacharyya_coefficient": float("nan"),
             "bhattacharyya_distance": float("nan"),
             "hellinger_distance": float("nan"),
+            "ks_statistic": float("nan"),
+            "kuiper_statistic": float("nan"),
         }
 
     kl_real_to_sim = float(np.sum(p * np.log(p / q)))
@@ -152,6 +165,9 @@ def _distribution_distances(r_vals, r_probs, s_vals, s_probs, epsilon=1e-12):
     bc = min(1.0, max(0.0, bc))
     bhattacharyya_distance = float(-np.log(max(bc, epsilon)))
     hellinger_distance = float(np.sqrt(max(0.0, 1.0 - bc)))
+    cdf_diff = _aligned_cdf_differences(r_vals, r_probs, s_vals, s_probs)
+    ks_statistic = float(np.max(np.abs(cdf_diff)))
+    kuiper_statistic = float(np.max(cdf_diff) - np.min(cdf_diff))
 
     return {
         "kl_real_to_sim": kl_real_to_sim,
@@ -160,6 +176,8 @@ def _distribution_distances(r_vals, r_probs, s_vals, s_probs, epsilon=1e-12):
         "bhattacharyya_coefficient": bc,
         "bhattacharyya_distance": bhattacharyya_distance,
         "hellinger_distance": hellinger_distance,
+        "ks_statistic": ks_statistic,
+        "kuiper_statistic": kuiper_statistic,
     }
 
 
@@ -192,6 +210,8 @@ def score_real_vs_sim_counts(
     total_bhattacharyya_coefficient = 0.0
     total_bhattacharyya_distance = 0.0
     total_hellinger_distance = 0.0
+    total_ks_statistic = 0.0
+    total_kuiper_statistic = 0.0
     compared = 0
     skipped_real = 0
     skipped_sim = 0
@@ -238,6 +258,8 @@ def score_real_vs_sim_counts(
         total_bhattacharyya_coefficient += extra_distances["bhattacharyya_coefficient"]
         total_bhattacharyya_distance += extra_distances["bhattacharyya_distance"]
         total_hellinger_distance += extra_distances["hellinger_distance"]
+        total_ks_statistic += extra_distances["ks_statistic"]
+        total_kuiper_statistic += extra_distances["kuiper_statistic"]
         compared += 1
 
     avg_w1 = (total_w1 / compared) if compared > 0 else float("nan")
@@ -268,6 +290,10 @@ def score_real_vs_sim_counts(
     avg_hellinger_distance = (
         total_hellinger_distance / compared if compared > 0 else float("nan")
     )
+    avg_ks_statistic = total_ks_statistic / compared if compared > 0 else float("nan")
+    avg_kuiper_statistic = (
+        total_kuiper_statistic / compared if compared > 0 else float("nan")
+    )
 
     return {
         "sum_w1": total_w1,
@@ -285,6 +311,8 @@ def score_real_vs_sim_counts(
         "avg_bhattacharyya_coefficient": avg_bhattacharyya_coefficient,
         "avg_bhattacharyya_distance": avg_bhattacharyya_distance,
         "avg_hellinger_distance": avg_hellinger_distance,
+        "avg_ks_statistic": avg_ks_statistic,
+        "avg_kuiper_statistic": avg_kuiper_statistic,
         "distribution_smoothing_epsilon": smoothing_epsilon,
         "short_cdf_length": short_cdf_length,
         "long_tail_length": long_tail_length,
