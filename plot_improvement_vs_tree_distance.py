@@ -69,12 +69,19 @@ def plot_metric(frame, metric, output_path, label_top):
     n_labels = min(label_top, len(frame))
     for index in np.argsort(np.abs(y))[-n_labels:]:
         row = frame.iloc[index]
+        near_top = y[index] >= np.quantile(y, 0.85)
+        near_right = x[index] >= np.quantile(x, 0.85)
+        x_offset = -6 if near_right else 6
+        y_offset = -10 if near_top else 8
         ax.annotate(
             short_pair(row),
             (x[index], y[index]),
-            xytext=(6, 6),
+            xytext=(x_offset, y_offset),
             textcoords="offset points",
             fontsize=8,
+            ha="right" if near_right else "left",
+            va="top" if near_top else "bottom",
+            annotation_clip=False,
         )
 
     display_name = "KS" if metric == "ks" else "Kuiper"
@@ -87,16 +94,18 @@ def plot_metric(frame, metric, output_path, label_top):
         f"{display_name} improvement\n(single gene - exponent 3)"
     )
     ax.text(
-        0.03,
+        0.97,
         0.97,
         f"Pearson r = {pearson_r:.3f}, p = {pearson_p:.3g}\n"
         f"Spearman rho = {spearman_rho:.3f}, p = {spearman_p:.3g}",
         transform=ax.transAxes,
+        ha="right",
         va="top",
         bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.9},
     )
+    ax.margins(x=0.04, y=0.12)
     ax.grid(alpha=0.25)
-    ax.legend(loc="best")
+    ax.legend(loc="lower left")
     fig.tight_layout()
     fig.savefig(output_path, dpi=300)
     plt.close(fig)
