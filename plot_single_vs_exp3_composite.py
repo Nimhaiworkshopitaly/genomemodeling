@@ -77,7 +77,6 @@ def main():
     single = single[single["seed"].isin(common_seeds)].set_index("seed").loc[common_seeds]
     exp3 = exp3[exp3["seed"].isin(common_seeds)].set_index("seed").loc[common_seeds]
 
-    labels = ["Single gene", "Exponent 3"]
     colors = ["#457b9d", "#2a9d8f"]
     means = [single["composite_score"].mean(), exp3["composite_score"].mean()]
     sds = [single["composite_score"].std(ddof=1), exp3["composite_score"].std(ddof=1)]
@@ -88,7 +87,13 @@ def main():
         contributions.append(weight * (exp3[column].mean() - single[column].mean()))
         component_labels.append(label)
 
-    fig, axes = plt.subplots(1, 3, figsize=(16, 5.5))
+    fig, axes = plt.subplots(
+        1,
+        2,
+        figsize=(14, 6),
+        gridspec_kw={"width_ratios": [1.05, 1.35]},
+        constrained_layout=True,
+    )
 
     # Panel A: event-size mechanism.
     lengths = np.arange(1, 11)
@@ -104,34 +109,46 @@ def main():
     axes[0].set_xticks(lengths)
     axes[0].legend()
 
-    # Panel B: matched-seed composite scores.
-    x = np.arange(2)
-    axes[1].bar(x, means, yerr=sds, capsize=7, color=colors, width=0.62)
-    for i, model in enumerate((single, exp3)):
-        jitter = np.linspace(-0.08, 0.08, len(model))
-        axes[1].scatter(np.full(len(model), i) + jitter, model["composite_score"],
-                        color="black", s=28, zorder=3)
-    axes[1].set_xticks(x, labels)
-    axes[1].set_ylabel("Composite score (lower is better)")
-    axes[1].set_title(f"B. Mean +/- SD across {len(common_seeds)} matched seeds")
-    for i, value in enumerate(means):
-        axes[1].text(i, value, f"{value:.3f}", ha="center", va="bottom")
-
     # Panel C: exp3 minus single-gene component contributions.
     contribution_colors = ["#d1495b" if value > 0 else "#2a9d8f"
                            for value in contributions]
     y = np.arange(len(contributions))
-    axes[2].barh(y, contributions, color=contribution_colors)
-    axes[2].axvline(0, color="black", linewidth=1)
-    axes[2].set_yticks(y, component_labels)
-    axes[2].invert_yaxis()
-    axes[2].set_xlabel("Weighted contribution: exponent 3 - single gene")
-    axes[2].set_title("C. Why the composite scores differ")
+    contribution_ax = axes[1]
+    contribution_ax.barh(y, contributions, color=contribution_colors, height=0.62)
+    contribution_ax.axvline(0, color="black", linewidth=1.2)
+    contribution_ax.set_yticks(y, component_labels)
+    contribution_ax.invert_yaxis()
+    contribution_ax.set_xlabel("Weighted contribution: exponent 3 - single gene")
+    contribution_ax.set_title("C. Why the composite scores differ")
+
+    value_min = min(0.0, min(contributions))
+    value_max = max(0.0, max(contributions))
+    value_span = max(value_max - value_min, 0.1)
+    contribution_ax.set_xlim(
+        value_min - 0.18 * value_span,
+        value_max + 0.24 * value_span,
+    )
     for yi, value in zip(y, contributions):
-        axes[2].text(value, yi, f" {value:+.3f}",
-                     ha="left" if value >= 0 else "right", va="center")
-    axes[2].text(0.02, 0.02, "negative favors exponent 3",
-                 transform=axes[2].transAxes, fontsize=9)
+        contribution_ax.annotate(
+            f"{value:+.3f}",
+            xy=(value, yi),
+            xytext=(8 if value >= 0 else -8, 0),
+            textcoords="offset points",
+            ha="left" if value >= 0 else "right",
+            va="center",
+            fontsize=12,
+            fontweight="bold",
+            clip_on=True,
+        )
+    contribution_ax.text(
+        0.98,
+        0.04,
+        "Negative values favor exponent 3",
+        transform=contribution_ax.transAxes,
+        ha="right",
+        va="bottom",
+        fontsize=10,
+    )
 
     for ax in axes:
         ax.grid(axis="y", alpha=0.22)
@@ -141,9 +158,8 @@ def main():
         f"rt={args.rt:.6g}",
         fontsize=17,
     )
-    fig.tight_layout(rect=[0, 0, 1, 0.93])
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
-    fig.savefig(args.out, dpi=300, bbox_inches="tight")
+    fig.savefig(args.out, dpi=300)
     plt.close(fig)
 
     print(f"Matched seeds: {common_seeds}")
