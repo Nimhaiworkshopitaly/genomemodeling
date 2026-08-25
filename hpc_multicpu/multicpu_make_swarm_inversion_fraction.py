@@ -19,10 +19,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--n-runs", type=int, default=100)
     parser.add_argument("--workers", type=int, default=16)
     parser.add_argument(
-        "--out-dir", default="hpc_multicpu/results_inversion_fraction"
+        "--out-dir", default="hpc_multicpu/results_inversion_fraction_uniform"
     )
     parser.add_argument(
-        "--swarm-file", default="hpc_multicpu/jobs_inversion_fraction.swarm"
+        "--swarm-file", default="hpc_multicpu/jobs_inversion_fraction_uniform.swarm"
     )
     return parser.parse_args()
 
@@ -52,7 +52,7 @@ def main() -> None:
                 "--total-rearrangement-rate", f"{args.total_rearrangement_rate:.12g}",
                 "--inversion-fraction", f"{fraction:.12g}",
                 "--translocation-exp", "1e9",
-                "--inversion-exp", "3",
+                "--inversion-size-mode", "uniform_breakpoints",
                 "--core-fraction", f"{args.core_fraction:.12g}",
                 "--core-protection", f"{args.core_protection:.12g}",
                 "--n-runs", str(args.n_runs),
