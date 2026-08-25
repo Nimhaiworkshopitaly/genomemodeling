@@ -18,6 +18,24 @@ def sample_truncated_powerlaw(L0, alpha=2.0):
     return int(np.random.choice(ks, p=weights))
 
 
+def sample_uniform_breakpoint_inversion(genome_length):
+    """Return a circular inversion start and length from two uniform breakpoints.
+
+    Ordered breakpoints make lengths 1..L-1 equally likely on a circular genome.
+    Length-one inversions are invisible to the synteny comparison, so resample
+    them instead of counting them as effective inversion events.
+    """
+    if genome_length < 3:
+        return None
+
+    start = random.randrange(genome_length)
+    while True:
+        end = random.randrange(genome_length)
+        length = (end - start) % genome_length
+        if length >= 2:
+            return start, length
+
+
 def gene_numeric_id(gene):
     if isinstance(gene, int):
         return gene
@@ -78,7 +96,8 @@ def should_reject_core_event(core_fraction_in_block, core_protection):
 def evolve_genome_branch(
     genome, branch_length, gain_rate, loss_rate, inv_rate, trans_rate,
     gain_exp, loss_exp, inv_exp, trans_exp, next_gene_id_holder, L0_ancestral,
-    core_gene_ids=None, core_protection=0.0
+    core_gene_ids=None, core_protection=0.0,
+    inversion_size_mode="powerlaw"
 ):
     genome = genome.copy()
     core_gene_ids = core_gene_ids or set()
@@ -98,7 +117,13 @@ def evolve_genome_branch(
         Lc = len(genome)
         loc_point = random.randrange(Lc)
 
-        if event == "G":
+        if event == "I" and inversion_size_mode == "uniform_breakpoints":
+            inversion = sample_uniform_breakpoint_inversion(Lc)
+            if inversion is None:
+                continue
+            loc_point, k = inversion
+
+        elif event == "G":
             k = sample_truncated_powerlaw(L0_ancestral, gain_exp)
         elif event == "L":
             k = sample_truncated_powerlaw(L0_ancestral, loss_exp)
@@ -179,7 +204,8 @@ def median_root_to_leaf_lengths(tree):
 def evolve_genome(
     tree, root_genome, per_gene_gain_rate, per_gene_loss_rate,
     per_gene_inv_rate, per_gene_trans_rate, gain_exp, loss_exp, inv_exp,
-    trans_exp, next_gene_id_holder, core_fraction=0.0, core_protection=0.0
+    trans_exp, next_gene_id_holder, core_fraction=0.0, core_protection=0.0,
+    inversion_size_mode="powerlaw"
 ):
     genomes = {}
     num_genes = len(root_genome)
@@ -204,7 +230,8 @@ def evolve_genome(
                 next_gene_id_holder,
                 L0_ancestral,
                 core_gene_ids=core_gene_ids,
-                core_protection=core_protection
+                core_protection=core_protection,
+                inversion_size_mode=inversion_size_mode
             )
             genomes[child] = child_genome
     return genomes
@@ -276,7 +303,8 @@ def run_simulation(
     per_gene_gain_rate, per_gene_loss_rate, per_gene_inv_rate,
     per_gene_trans_rate=0.0,
     gain_exp=2.0, loss_exp=2.0, inv_exp=2.0, trans_exp=2.0,
-    core_fraction=0.0, core_protection=0.0
+    core_fraction=0.0, core_protection=0.0,
+    inversion_size_mode="powerlaw"
 ):
     next_gene_id_holder = [len(root_genome) + 1]
 
@@ -286,7 +314,8 @@ def run_simulation(
         gain_exp, loss_exp, inv_exp, trans_exp,
         next_gene_id_holder,
         core_fraction=core_fraction,
-        core_protection=core_protection
+        core_protection=core_protection,
+        inversion_size_mode=inversion_size_mode
     )
 
     leaves = tree.get_terminals()
