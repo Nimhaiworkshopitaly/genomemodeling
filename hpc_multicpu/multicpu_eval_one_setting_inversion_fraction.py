@@ -38,6 +38,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--inversion-fraction", type=float, required=True)
     parser.add_argument("--translocation-exp", type=float, default=1e9)
     parser.add_argument("--inversion-exp", type=float, default=3.0)
+    parser.add_argument(
+        "--inversion-size-mode",
+        choices=("powerlaw", "uniform_breakpoints"),
+        default="uniform_breakpoints",
+        help=(
+            "Use two uniform ordered breakpoints (resampling invisible "
+            "length-one inversions) or the legacy power-law size sampler."
+        ),
+    )
     parser.add_argument("--gain-loss-exp", type=float, default=1e9)
     parser.add_argument("--core-fraction", type=float, default=0.5)
     parser.add_argument("--core-protection", type=float, default=0.9)
@@ -67,8 +76,8 @@ def split_counts(total: int, chunks: int) -> list[int]:
 def worker_simulate(payload):
     (
         tree, root_genome, rf, translocation_rate, inversion_rate,
-        translocation_exp, inversion_exp, gain_loss_exp, core_fraction,
-        core_protection, n_runs, seed,
+        translocation_exp, inversion_exp, inversion_size_mode, gain_loss_exp,
+        core_fraction, core_protection, n_runs, seed,
     ) = payload
     rng = np.random.default_rng(seed)
     counts = defaultdict(Counter)
@@ -90,6 +99,7 @@ def worker_simulate(payload):
             trans_exp=translocation_exp,
             core_fraction=core_fraction,
             core_protection=core_protection,
+            inversion_size_mode=inversion_size_mode,
         )
         for (genome_a, genome_b), lengths in simulated_pairs.items():
             pair = tuple(sorted((genome_a, genome_b)))
@@ -126,8 +136,9 @@ def main() -> None:
         worker_seed = int(seed_rng.integers(0, 2**32 - 1))
         payloads.append((
             tree, root_genome, args.rf, translocation_rate, inversion_rate,
-            args.translocation_exp, args.inversion_exp, args.gain_loss_exp,
-            args.core_fraction, args.core_protection, count, worker_seed,
+            args.translocation_exp, args.inversion_exp, args.inversion_size_mode,
+            args.gain_loss_exp, args.core_fraction, args.core_protection, count,
+            worker_seed,
         ))
 
     with Pool(processes=len(payloads)) as pool:
@@ -145,6 +156,7 @@ def main() -> None:
         "inversion_rate": inversion_rate,
         "translocation_exp": args.translocation_exp,
         "inversion_exp": args.inversion_exp,
+        "inversion_size_mode": args.inversion_size_mode,
         "gain_loss_exp": args.gain_loss_exp,
         "core_fraction": args.core_fraction,
         "core_protection": args.core_protection,
@@ -180,6 +192,7 @@ def main() -> None:
     print(
         f"wrote {args.out_csv}: inversion_fraction={args.inversion_fraction:g}, "
         f"trans_rate={translocation_rate:.6g}, inv_rate={inversion_rate:.6g}, "
+        f"inv_size_mode={args.inversion_size_mode}, "
         f"KS={scores['avg_ks_statistic']:.5g}, "
         f"Kuiper={scores['avg_kuiper_statistic']:.5g}"
     )
