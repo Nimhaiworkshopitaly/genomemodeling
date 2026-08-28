@@ -215,6 +215,7 @@ def score_real_vs_sim_counts(
     compared = 0
     skipped_real = 0
     skipped_sim = 0
+    per_pair_metrics = []
 
     for pair, (r_vals, r_probs) in real_pmfs.items():
         if r_vals.size == 0:
@@ -233,18 +234,21 @@ def score_real_vs_sim_counts(
         s_probs = np.fromiter((sim_counts[v] / s_total for v in s_vals), dtype=float)
 
         dist = wasserstein_distance(r_vals, s_vals, u_weights=r_probs, v_weights=s_probs)
-        total_w1 += float(dist)
-        total_singleton_abs_error += abs(
+        singleton_abs_error = abs(
             _pmf_probability_at(r_vals, r_probs, 1) - _pmf_probability_at(s_vals, s_probs, 1)
         )
-        total_short_cdf_abs_error += abs(
+        short_cdf_abs_error = abs(
             _pmf_cdf_at(r_vals, r_probs, short_cdf_length)
             - _pmf_cdf_at(s_vals, s_probs, short_cdf_length)
         )
-        total_long_tail_abs_error += abs(
+        long_tail_abs_error = abs(
             _pmf_tail_at(r_vals, r_probs, long_tail_length)
             - _pmf_tail_at(s_vals, s_probs, long_tail_length)
         )
+        total_w1 += float(dist)
+        total_singleton_abs_error += singleton_abs_error
+        total_short_cdf_abs_error += short_cdf_abs_error
+        total_long_tail_abs_error += long_tail_abs_error
         extra_distances = _distribution_distances(
             r_vals,
             r_probs,
@@ -260,6 +264,16 @@ def score_real_vs_sim_counts(
         total_hellinger_distance += extra_distances["hellinger_distance"]
         total_ks_statistic += extra_distances["ks_statistic"]
         total_kuiper_statistic += extra_distances["kuiper_statistic"]
+        per_pair_metrics.append({
+            "genome_a": pair[0],
+            "genome_b": pair[1],
+            "w1": float(dist),
+            "singleton_abs_error": float(singleton_abs_error),
+            "short_cdf_abs_error": float(short_cdf_abs_error),
+            "long_tail_abs_error": float(long_tail_abs_error),
+            "ks_statistic": extra_distances["ks_statistic"],
+            "kuiper_statistic": extra_distances["kuiper_statistic"],
+        })
         compared += 1
 
     avg_w1 = (total_w1 / compared) if compared > 0 else float("nan")
@@ -320,6 +334,7 @@ def score_real_vs_sim_counts(
         "composite_w_singleton": weights["singleton"],
         "composite_w_short_cdf": weights["short_cdf"],
         "composite_w_long_tail": weights["long_tail"],
+        "per_pair_metrics": per_pair_metrics,
     }
 
 
