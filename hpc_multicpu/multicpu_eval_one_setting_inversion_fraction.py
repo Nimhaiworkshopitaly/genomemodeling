@@ -54,6 +54,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workers", type=int, default=16)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--out-csv", required=True)
+    parser.add_argument(
+        "--pair-out-csv",
+        help="Pair-level metric CSV (default: <out-csv stem>_pairs.csv).",
+    )
     args = parser.parse_args()
 
     if not 0.0 <= args.inversion_fraction <= 1.0:
@@ -189,12 +193,28 @@ def main() -> None:
         writer.writeheader()
         writer.writerow(row)
 
+    pair_out_csv = args.pair_out_csv or os.path.splitext(args.out_csv)[0] + "_pairs.csv"
+    pair_rows = []
+    for pair_metric in scores["per_pair_metrics"]:
+        pair_rows.append({
+            "dataset": row["dataset"],
+            "inversion_fraction": args.inversion_fraction,
+            "seed": args.seed,
+            **pair_metric,
+        })
+    if not pair_rows:
+        raise RuntimeError("No pair-level metrics were produced")
+    with open(pair_out_csv, "w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(pair_rows[0]))
+        writer.writeheader()
+        writer.writerows(pair_rows)
+
     print(
         f"wrote {args.out_csv}: inversion_fraction={args.inversion_fraction:g}, "
         f"trans_rate={translocation_rate:.6g}, inv_rate={inversion_rate:.6g}, "
         f"inv_size_mode={args.inversion_size_mode}, "
         f"KS={scores['avg_ks_statistic']:.5g}, "
-        f"Kuiper={scores['avg_kuiper_statistic']:.5g}"
+        f"Kuiper={scores['avg_kuiper_statistic']:.5g}; pairs={pair_out_csv}"
     )
 
 
