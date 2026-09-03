@@ -67,7 +67,10 @@ def load_results():
     import numpy as np
     import pandas as pd
 
-    paths = sorted(RESULTS.glob("result_t_*_i_*_seed_*.csv"))
+    paths = sorted(
+        path for path in RESULTS.glob("result_t_*_i_*_seed_*.csv")
+        if not path.name.endswith("_pairs.csv")
+    )
     if not paths:
         raise SystemExit(f"No results found in {RESULTS}")
     frames = []
