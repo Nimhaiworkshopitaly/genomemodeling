@@ -14,6 +14,13 @@ def parse_args() -> argparse.Namespace:
         description="Create a swarm file using hpc_multicpu/multicpu_eval_one_setting.py."
     )
     parser.add_argument("--atgc-dir", default="ATGC0070")
+    parser.add_argument(
+        "--tree-filename",
+        default="atgc.iq.r.tre",
+        help="Tree path relative to --atgc-dir.",
+    )
+    parser.add_argument("--cc-filename", default="atgc.cc.csv")
+    parser.add_argument("--root-mode", default="median_synthetic")
     parser.add_argument("--out-dir", default="hpc_multicpu/results")
     parser.add_argument("--swarm-file", default="hpc_multicpu/jobs_multicpu.swarm")
     parser.add_argument("--rf-min", type=float, default=1e-2)
@@ -101,6 +108,9 @@ def main() -> None:
                         args.python,
                         "hpc_multicpu/multicpu_eval_one_setting_core_composite.py",
                         "--atgc-dir", args.atgc_dir,
+                        "--tree-filename", args.tree_filename,
+                        "--cc-filename", args.cc_filename,
+                        "--root-mode", args.root_mode,
                         "--rf", f"{rf:.12g}",
                         "--rt", f"{rt:.12g}",
                         "--n-runs", str(args.n_runs),
