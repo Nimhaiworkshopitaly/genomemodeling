@@ -205,6 +205,7 @@ def evolve_genome(
     tree, root_genome, per_gene_gain_rate, per_gene_loss_rate,
     per_gene_inv_rate, per_gene_trans_rate, gain_exp, loss_exp, inv_exp,
     trans_exp, next_gene_id_holder, core_fraction=0.0, core_protection=0.0,
+    core_gene_ids=None,
     inversion_size_mode="powerlaw"
 ):
     genomes = {}
@@ -217,7 +218,13 @@ def evolve_genome(
     branch_trans_rate = (num_genes * per_gene_trans_rate) / median_path_length
 
     L0_ancestral = len(root_genome)
-    core_gene_ids = build_core_gene_set(root_genome, core_fraction)
+    if core_gene_ids is None:
+        core_gene_ids = build_core_gene_set(root_genome, core_fraction)
+    else:
+        core_gene_ids = {
+            gid for gene in core_gene_ids
+            if (gid := gene_numeric_id(gene)) is not None
+        }
 
     genomes[tree.root] = root_genome.copy()
     for parent in tree.find_clades(order="level"):
@@ -303,7 +310,7 @@ def run_simulation(
     per_gene_gain_rate, per_gene_loss_rate, per_gene_inv_rate,
     per_gene_trans_rate=0.0,
     gain_exp=2.0, loss_exp=2.0, inv_exp=2.0, trans_exp=2.0,
-    core_fraction=0.0, core_protection=0.0,
+    core_fraction=0.0, core_protection=0.0, core_gene_ids=None,
     inversion_size_mode="powerlaw"
 ):
     next_gene_id_holder = [len(root_genome) + 1]
@@ -315,6 +322,7 @@ def run_simulation(
         next_gene_id_holder,
         core_fraction=core_fraction,
         core_protection=core_protection,
+        core_gene_ids=core_gene_ids,
         inversion_size_mode=inversion_size_mode
     )
 
