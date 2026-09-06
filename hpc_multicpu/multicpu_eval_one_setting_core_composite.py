@@ -21,7 +21,12 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from prod_1b_core_composite import build_real_pmfs, make_root_genome, score_real_vs_sim_counts  # noqa: E402
+from prod_1b_core_composite import (  # noqa: E402
+    build_real_pmfs,
+    empirical_core_gene_ids,
+    make_root_genome,
+    score_real_vs_sim_counts,
+)
 from simulation_core_composite import run_simulation  # noqa: E402
 
 
@@ -42,6 +47,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--huge-exp", type=float, default=1e9)
     parser.add_argument("--core-fraction", type=float, default=0.5)
     parser.add_argument("--core-protection", type=float, default=0.9)
+    parser.add_argument(
+        "--core-mode",
+        choices=("synthetic_fraction", "empirical"),
+        default="synthetic_fraction",
+        help="Use the legacy synthetic fraction or COGs observed across tree genomes.",
+    )
+    parser.add_argument(
+        "--core-prevalence",
+        type=float,
+        default=1.0,
+        help="Minimum genome prevalence for empirical core COGs (1.0 = strict core).",
+    )
     parser.add_argument("--out-csv", required=True)
     return parser.parse_args()
 
@@ -56,7 +73,7 @@ def split_counts(total: int, chunks: int) -> list[int]:
 def worker_simulate(payload):
     (
         tree, root_genome, rf, rt, inv_rate, huge_exp, n_runs, seed,
-        core_fraction, core_protection,
+        core_fraction, core_protection, core_gene_ids,
     ) = payload
     rng = np.random.default_rng(seed) if seed is not None else None
     counts = defaultdict(Counter)
@@ -80,6 +97,7 @@ def worker_simulate(payload):
             trans_exp=huge_exp,
             core_fraction=core_fraction,
             core_protection=core_protection,
+            core_gene_ids=core_gene_ids,
         )
         for (a, b), lens in sim_pairs.items():
             pair = (a, b) if a <= b else (b, a)
@@ -107,6 +125,26 @@ def main() -> None:
     real_pmfs, tree, real_genomes, med_path = build_real_pmfs(tree_path, cc_path)
     root_genome = make_root_genome(args.root_mode, tree, cc_path, real_genomes=real_genomes)
 
+    core_gene_ids = None
+    empirical_core_count = 0
+    root_core_count = 0
+    if args.core_mode == "empirical":
+        tree_genome_ids = [
+            leaf.name for leaf in tree.get_terminals() if leaf.name in real_genomes
+        ]
+        core_gene_ids = empirical_core_gene_ids(
+            real_genomes,
+            genome_ids=tree_genome_ids,
+            min_prevalence=args.core_prevalence,
+        )
+        empirical_core_count = len(core_gene_ids)
+        root_core_count = len(set(root_genome) & core_gene_ids)
+        if root_core_count == 0:
+            raise ValueError(
+                "The empirical core has no COG IDs in the selected root genome. "
+                "Use a root mode with observed COG identities."
+            )
+
     run_counts = split_counts(args.n_runs, args.workers)
     seed_rng = np.random.default_rng(args.seed) if args.seed is not None else None
     payloads = []
@@ -123,6 +161,7 @@ def main() -> None:
             worker_seed,
             args.core_fraction,
             args.core_protection,
+            core_gene_ids,
         ))
 
     with Pool(processes=len(payloads)) as pool:
@@ -133,7 +172,8 @@ def main() -> None:
 
     fieldnames = [
         "dataset", "root_mode", "rf", "rt", "inv_rate", "n_runs", "workers",
-        "core_fraction", "core_protection",
+        "core_fraction", "core_protection", "core_mode", "core_prevalence",
+        "empirical_core_count", "root_core_count", "root_core_fraction",
         "sum_w1", "avg_w1", "n_pairs", "skipped_real", "skipped_sim",
         "composite_score", "avg_singleton_abs_error",
         "avg_short_cdf_abs_error", "avg_long_tail_abs_error",
@@ -160,6 +200,11 @@ def main() -> None:
             "workers": len(payloads),
             "core_fraction": f"{args.core_fraction:.10g}",
             "core_protection": f"{args.core_protection:.10g}",
+            "core_mode": args.core_mode,
+            "core_prevalence": f"{args.core_prevalence:.10g}",
+            "empirical_core_count": empirical_core_count,
+            "root_core_count": root_core_count,
+            "root_core_fraction": f"{root_core_count / len(root_genome):.12g}",
             "sum_w1": f"{scores['sum_w1']:.12g}",
             "avg_w1": f"{scores['avg_w1']:.12g}",
             "n_pairs": scores["n_pairs"],
@@ -193,6 +238,7 @@ def main() -> None:
     print(
         f"wrote {args.out_csv}: rf={args.rf:.4g}, rt={args.rt:.4g}, "
         f"n_runs={args.n_runs}, workers={len(payloads)}, "
+        f"core_mode={args.core_mode}, root_core={root_core_count}, "
         f"sum_w1={scores['sum_w1']:.4g}, avg_w1={scores['avg_w1']:.4g}, "
         f"composite={scores['composite_score']:.4g}"
     )
