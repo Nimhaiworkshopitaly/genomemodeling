@@ -33,6 +33,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--core-fraction", type=float, default=0.5)
     parser.add_argument("--core-protection", type=float, default=0.9)
     parser.add_argument(
+        "--core-mode",
+        choices=("synthetic_fraction", "empirical"),
+        default="synthetic_fraction",
+    )
+    parser.add_argument("--core-prevalence", type=float, default=1.0)
+    parser.add_argument(
         "--core-fractions",
         default=None,
         help=(
@@ -117,6 +123,8 @@ def main() -> None:
                         "--workers", str(args.workers),
                         "--core-fraction", f"{core_fraction:.12g}",
                         "--core-protection", f"{core_protection:.12g}",
+                        "--core-mode", args.core_mode,
+                        "--core-prevalence", f"{args.core_prevalence:.12g}",
                         "--seed", str(job_seed),
                         "--out-csv", out_csv,
                     ]
@@ -132,6 +140,9 @@ def main() -> None:
     print(f"rt points: {len(rt_vals)}")
     print(f"core_fraction values: {', '.join(f'{x:g}' for x in core_fraction_vals)}")
     print(f"core_protection values: {', '.join(f'{x:g}' for x in core_protection_vals)}")
+    print(f"core mode: {args.core_mode}")
+    if args.core_mode == "empirical":
+        print(f"core prevalence: {args.core_prevalence:g}")
     print(f"workers per job: {args.workers}")
 
 
