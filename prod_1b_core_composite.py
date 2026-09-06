@@ -75,6 +75,24 @@ def load_real_genomes_from_cc(cc_path):
     return df.groupby("genome_ID")[key_col].apply(list).to_dict()
 
 
+def empirical_core_gene_ids(real_genomes, genome_ids=None, min_prevalence=1.0):
+    """Return COG IDs present in the requested fraction of observed genomes."""
+    if not 0 < min_prevalence <= 1:
+        raise ValueError("min_prevalence must be in (0, 1].")
+
+    selected = list(real_genomes) if genome_ids is None else [
+        genome_id for genome_id in genome_ids if genome_id in real_genomes
+    ]
+    if not selected:
+        raise ValueError("No observed genomes matched the requested genome IDs.")
+
+    presence = Counter()
+    for genome_id in selected:
+        presence.update(set(convert_to_numeric(real_genomes[genome_id])))
+    minimum_count = int(math.ceil(min_prevalence * len(selected) - 1e-12))
+    return {gene_id for gene_id, count in presence.items() if count >= minimum_count}
+
+
 def lengths_to_pmf(lengths):
     """
     list[int] -> (vals[np.int64], probs[np.float64]) for discrete pmf.
@@ -215,7 +233,6 @@ def score_real_vs_sim_counts(
     compared = 0
     skipped_real = 0
     skipped_sim = 0
-    per_pair_metrics = []
 
     for pair, (r_vals, r_probs) in real_pmfs.items():
         if r_vals.size == 0:
@@ -234,21 +251,18 @@ def score_real_vs_sim_counts(
         s_probs = np.fromiter((sim_counts[v] / s_total for v in s_vals), dtype=float)
 
         dist = wasserstein_distance(r_vals, s_vals, u_weights=r_probs, v_weights=s_probs)
-        singleton_abs_error = abs(
+        total_w1 += float(dist)
+        total_singleton_abs_error += abs(
             _pmf_probability_at(r_vals, r_probs, 1) - _pmf_probability_at(s_vals, s_probs, 1)
         )
-        short_cdf_abs_error = abs(
+        total_short_cdf_abs_error += abs(
             _pmf_cdf_at(r_vals, r_probs, short_cdf_length)
             - _pmf_cdf_at(s_vals, s_probs, short_cdf_length)
         )
-        long_tail_abs_error = abs(
+        total_long_tail_abs_error += abs(
             _pmf_tail_at(r_vals, r_probs, long_tail_length)
             - _pmf_tail_at(s_vals, s_probs, long_tail_length)
         )
-        total_w1 += float(dist)
-        total_singleton_abs_error += singleton_abs_error
-        total_short_cdf_abs_error += short_cdf_abs_error
-        total_long_tail_abs_error += long_tail_abs_error
         extra_distances = _distribution_distances(
             r_vals,
             r_probs,
@@ -264,16 +278,6 @@ def score_real_vs_sim_counts(
         total_hellinger_distance += extra_distances["hellinger_distance"]
         total_ks_statistic += extra_distances["ks_statistic"]
         total_kuiper_statistic += extra_distances["kuiper_statistic"]
-        per_pair_metrics.append({
-            "genome_a": pair[0],
-            "genome_b": pair[1],
-            "w1": float(dist),
-            "singleton_abs_error": float(singleton_abs_error),
-            "short_cdf_abs_error": float(short_cdf_abs_error),
-            "long_tail_abs_error": float(long_tail_abs_error),
-            "ks_statistic": extra_distances["ks_statistic"],
-            "kuiper_statistic": extra_distances["kuiper_statistic"],
-        })
         compared += 1
 
     avg_w1 = (total_w1 / compared) if compared > 0 else float("nan")
@@ -334,8 +338,84 @@ def score_real_vs_sim_counts(
         "composite_w_singleton": weights["singleton"],
         "composite_w_short_cdf": weights["short_cdf"],
         "composite_w_long_tail": weights["long_tail"],
-        "per_pair_metrics": per_pair_metrics,
     }
+
+
+def score_real_vs_sim_counts_per_pair(
+    real_pmfs,
+    pooled_sim_counts,
+    composite_weights=None,
+    short_cdf_length=10,
+    long_tail_length=50,
+    smoothing_epsilon=1e-12,
+):
+    """Return the same fit components as the aggregate scorer, one row per pair."""
+    weights = dict(DEFAULT_COMPOSITE_WEIGHTS)
+    if composite_weights is not None:
+        weights.update(composite_weights)
+
+    rows = []
+    for pair, (real_vals, real_probs) in real_pmfs.items():
+        sim_counter = pooled_sim_counts.get(pair)
+        if not sim_counter:
+            continue
+
+        simulated_n_blocks = int(sum(sim_counter.values()))
+        if simulated_n_blocks <= 0:
+            continue
+
+        sim_vals = np.asarray(sorted(sim_counter), dtype=float)
+        sim_probs = np.asarray(
+            [sim_counter[value] / simulated_n_blocks for value in sim_vals],
+            dtype=float,
+        )
+        real_vals = np.asarray(real_vals, dtype=float)
+        real_probs = np.asarray(real_probs, dtype=float)
+
+        w1 = float(wasserstein_distance(real_vals, sim_vals, real_probs, sim_probs))
+        real_singleton = _pmf_probability_at(real_vals, real_probs, 1)
+        simulated_singleton = _pmf_probability_at(sim_vals, sim_probs, 1)
+        singleton_error = abs(real_singleton - simulated_singleton)
+        real_short_cdf = _pmf_cdf_at(real_vals, real_probs, short_cdf_length)
+        simulated_short_cdf = _pmf_cdf_at(sim_vals, sim_probs, short_cdf_length)
+        short_cdf_error = abs(real_short_cdf - simulated_short_cdf)
+        real_long_tail = _pmf_tail_at(real_vals, real_probs, long_tail_length)
+        simulated_long_tail = _pmf_tail_at(sim_vals, sim_probs, long_tail_length)
+        long_tail_error = abs(real_long_tail - simulated_long_tail)
+        distances = _distribution_distances(
+            real_vals,
+            real_probs,
+            sim_vals,
+            sim_probs,
+            smoothing_epsilon=smoothing_epsilon,
+        )
+
+        pair_a, pair_b = pair
+        rows.append(
+            {
+                "pair_a": pair_a,
+                "pair_b": pair_b,
+                "w1": w1,
+                "real_singleton_frequency": real_singleton,
+                "simulated_singleton_frequency": simulated_singleton,
+                "singleton_abs_error": singleton_error,
+                "real_short_cdf": real_short_cdf,
+                "simulated_short_cdf": simulated_short_cdf,
+                "short_cdf_abs_error": short_cdf_error,
+                "real_long_tail": real_long_tail,
+                "simulated_long_tail": simulated_long_tail,
+                "long_tail_abs_error": long_tail_error,
+                "composite_score": (
+                    weights["w1"] * w1
+                    + weights["singleton"] * singleton_error
+                    + weights["short_cdf"] * short_cdf_error
+                    + weights["long_tail"] * long_tail_error
+                ),
+                "simulated_n_blocks": simulated_n_blocks,
+                **distances,
+            }
+        )
+    return rows
 
 
 def build_real_pmfs(tree_path, cc_path, synteny_finder=findSyntenyReal2, genomes_numeric=None):
