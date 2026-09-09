@@ -19,6 +19,7 @@ if REPO_ROOT not in sys.path:
 
 from prod_1b_core_composite import (  # noqa: E402
     build_real_pmfs,
+    empirical_core_gene_ids,
     make_root_genome,
     score_real_vs_sim_counts,
 )
@@ -50,14 +51,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gain-loss-exp", type=float, default=1e9)
     parser.add_argument("--core-fraction", type=float, default=0.5)
     parser.add_argument("--core-protection", type=float, default=0.9)
+    parser.add_argument(
+        "--core-mode",
+        choices=("synthetic_fraction", "empirical"),
+        default="synthetic_fraction",
+        help="Use the legacy synthetic fraction or empirical COG prevalence.",
+    )
+    parser.add_argument(
+        "--core-prevalence",
+        type=float,
+        default=1.0,
+        help="Minimum genome prevalence for empirical core COGs (1.0 = strict core).",
+    )
     parser.add_argument("--n-runs", type=int, default=100)
     parser.add_argument("--workers", type=int, default=16)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--out-csv", required=True)
-    parser.add_argument(
-        "--pair-out-csv",
-        help="Pair-level metric CSV (default: <out-csv stem>_pairs.csv).",
-    )
     args = parser.parse_args()
 
     if not 0.0 <= args.inversion_fraction <= 1.0:
@@ -68,6 +77,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("event-size exponents must be positive")
     if args.n_runs < 1 or args.workers < 1:
         parser.error("n-runs and workers must be positive")
+    if not 0.0 < args.core_prevalence <= 1.0:
+        parser.error("--core-prevalence must be in (0, 1]")
     return args
 
 
@@ -81,7 +92,7 @@ def worker_simulate(payload):
     (
         tree, root_genome, rf, translocation_rate, inversion_rate,
         translocation_exp, inversion_exp, inversion_size_mode, gain_loss_exp,
-        core_fraction, core_protection, n_runs, seed,
+        core_fraction, core_protection, core_gene_ids, n_runs, seed,
     ) = payload
     rng = np.random.default_rng(seed)
     counts = defaultdict(Counter)
@@ -103,6 +114,7 @@ def worker_simulate(payload):
             trans_exp=translocation_exp,
             core_fraction=core_fraction,
             core_protection=core_protection,
+            core_gene_ids=core_gene_ids,
             inversion_size_mode=inversion_size_mode,
         )
         for (genome_a, genome_b), lengths in simulated_pairs.items():
@@ -134,6 +146,25 @@ def main() -> None:
         args.root_mode, tree, cc_path, real_genomes=real_genomes
     )
 
+    core_gene_ids = None
+    empirical_core_count = 0
+    root_core_count = 0
+    if args.core_mode == "empirical":
+        tree_genome_ids = [
+            leaf.name for leaf in tree.get_terminals() if leaf.name in real_genomes
+        ]
+        core_gene_ids = empirical_core_gene_ids(
+            real_genomes,
+            genome_ids=tree_genome_ids,
+            min_prevalence=args.core_prevalence,
+        )
+        empirical_core_count = len(core_gene_ids)
+        root_core_count = len(set(root_genome) & core_gene_ids)
+        if root_core_count == 0:
+            raise ValueError(
+                "The empirical core has no COG IDs in the selected root genome."
+            )
+
     seed_rng = np.random.default_rng(args.seed)
     payloads = []
     for count in split_counts(args.n_runs, args.workers):
@@ -141,8 +172,8 @@ def main() -> None:
         payloads.append((
             tree, root_genome, args.rf, translocation_rate, inversion_rate,
             args.translocation_exp, args.inversion_exp, args.inversion_size_mode,
-            args.gain_loss_exp, args.core_fraction, args.core_protection, count,
-            worker_seed,
+            args.gain_loss_exp, args.core_fraction, args.core_protection,
+            core_gene_ids, count, worker_seed,
         ))
 
     with Pool(processes=len(payloads)) as pool:
@@ -164,6 +195,11 @@ def main() -> None:
         "gain_loss_exp": args.gain_loss_exp,
         "core_fraction": args.core_fraction,
         "core_protection": args.core_protection,
+        "core_mode": args.core_mode,
+        "core_prevalence": args.core_prevalence,
+        "empirical_core_count": empirical_core_count,
+        "root_core_count": root_core_count,
+        "root_core_fraction": root_core_count / len(root_genome),
         "n_runs": args.n_runs,
         "workers": len(payloads),
         "sum_w1": scores["sum_w1"],
@@ -193,28 +229,13 @@ def main() -> None:
         writer.writeheader()
         writer.writerow(row)
 
-    pair_out_csv = args.pair_out_csv or os.path.splitext(args.out_csv)[0] + "_pairs.csv"
-    pair_rows = []
-    for pair_metric in scores["per_pair_metrics"]:
-        pair_rows.append({
-            "dataset": row["dataset"],
-            "inversion_fraction": args.inversion_fraction,
-            "seed": args.seed,
-            **pair_metric,
-        })
-    if not pair_rows:
-        raise RuntimeError("No pair-level metrics were produced")
-    with open(pair_out_csv, "w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(pair_rows[0]))
-        writer.writeheader()
-        writer.writerows(pair_rows)
-
     print(
         f"wrote {args.out_csv}: inversion_fraction={args.inversion_fraction:g}, "
         f"trans_rate={translocation_rate:.6g}, inv_rate={inversion_rate:.6g}, "
         f"inv_size_mode={args.inversion_size_mode}, "
+        f"core_mode={args.core_mode}, root_core={root_core_count}, "
         f"KS={scores['avg_ks_statistic']:.5g}, "
-        f"Kuiper={scores['avg_kuiper_statistic']:.5g}; pairs={pair_out_csv}"
+        f"Kuiper={scores['avg_kuiper_statistic']:.5g}"
     )
 
 
