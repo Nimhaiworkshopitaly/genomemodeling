@@ -21,6 +21,7 @@ from prod_1b_core_composite import (  # noqa: E402
     build_real_pmfs,
     empirical_core_gene_ids,
     make_root_genome,
+    observed_medoid_genome_id,
     score_real_vs_sim_counts,
 )
 from simulation_core_composite import run_simulation  # noqa: E402
@@ -92,7 +93,8 @@ def worker_simulate(payload):
     (
         tree, root_genome, rf, translocation_rate, inversion_rate,
         translocation_exp, inversion_exp, inversion_size_mode, gain_loss_exp,
-        core_fraction, core_protection, core_gene_ids, n_runs, seed,
+        core_fraction, core_protection, core_gene_ids, next_gene_id_start,
+        n_runs, seed,
     ) = payload
     rng = np.random.default_rng(seed)
     counts = defaultdict(Counter)
@@ -115,6 +117,7 @@ def worker_simulate(payload):
             core_fraction=core_fraction,
             core_protection=core_protection,
             core_gene_ids=core_gene_ids,
+            next_gene_id_start=next_gene_id_start,
             inversion_size_mode=inversion_size_mode,
         )
         for (genome_a, genome_b), lengths in simulated_pairs.items():
@@ -145,21 +148,30 @@ def main() -> None:
     root_genome = make_root_genome(
         args.root_mode, tree, cc_path, real_genomes=real_genomes
     )
+    tree_genome_ids = [
+        leaf.name for leaf in tree.get_terminals() if leaf.name in real_genomes
+    ]
+    selected_root_genome_id = (
+        observed_medoid_genome_id(real_genomes, tree_genome_ids)
+        if args.root_mode == "observed_medoid" else ""
+    )
+    all_observed_ids = {
+        gene_id for genome_id in tree_genome_ids for gene_id in real_genomes[genome_id]
+    }
+    next_gene_id_start = max(all_observed_ids, default=0) + 1
 
     core_gene_ids = None
     empirical_core_count = 0
     root_core_count = 0
     if args.core_mode == "empirical":
-        tree_genome_ids = [
-            leaf.name for leaf in tree.get_terminals() if leaf.name in real_genomes
-        ]
-        core_gene_ids = empirical_core_gene_ids(
+        empirical_ids = empirical_core_gene_ids(
             real_genomes,
             genome_ids=tree_genome_ids,
             min_prevalence=args.core_prevalence,
         )
-        empirical_core_count = len(core_gene_ids)
-        root_core_count = len(set(root_genome) & core_gene_ids)
+        empirical_core_count = len(empirical_ids)
+        core_gene_ids = empirical_ids.intersection(root_genome)
+        root_core_count = len(core_gene_ids)
         if root_core_count == 0:
             raise ValueError(
                 "The empirical core has no COG IDs in the selected root genome."
@@ -173,7 +185,7 @@ def main() -> None:
             tree, root_genome, args.rf, translocation_rate, inversion_rate,
             args.translocation_exp, args.inversion_exp, args.inversion_size_mode,
             args.gain_loss_exp, args.core_fraction, args.core_protection,
-            core_gene_ids, count, worker_seed,
+            core_gene_ids, next_gene_id_start, count, worker_seed,
         ))
 
     with Pool(processes=len(payloads)) as pool:
@@ -184,6 +196,9 @@ def main() -> None:
     row = {
         "dataset": os.path.basename(os.path.normpath(atgc_dir)),
         "root_mode": args.root_mode,
+        "selected_root_genome_id": selected_root_genome_id,
+        "root_genome_length": len(root_genome),
+        "next_gene_id_start": next_gene_id_start,
         "rf": args.rf,
         "total_rearrangement_rate": args.total_rearrangement_rate,
         "inversion_fraction": args.inversion_fraction,
