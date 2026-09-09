@@ -25,6 +25,7 @@ from prod_1b_core_composite import (  # noqa: E402
     build_real_pmfs,
     empirical_core_gene_ids,
     make_root_genome,
+    observed_medoid_genome_id,
     score_real_vs_sim_counts,
 )
 from simulation_core_composite import run_simulation  # noqa: E402
@@ -73,7 +74,7 @@ def split_counts(total: int, chunks: int) -> list[int]:
 def worker_simulate(payload):
     (
         tree, root_genome, rf, rt, inv_rate, huge_exp, n_runs, seed,
-        core_fraction, core_protection, core_gene_ids,
+        core_fraction, core_protection, core_gene_ids, next_gene_id_start,
     ) = payload
     rng = np.random.default_rng(seed) if seed is not None else None
     counts = defaultdict(Counter)
@@ -98,6 +99,7 @@ def worker_simulate(payload):
             core_fraction=core_fraction,
             core_protection=core_protection,
             core_gene_ids=core_gene_ids,
+            next_gene_id_start=next_gene_id_start,
         )
         for (a, b), lens in sim_pairs.items():
             pair = (a, b) if a <= b else (b, a)
@@ -124,21 +126,30 @@ def main() -> None:
 
     real_pmfs, tree, real_genomes, med_path = build_real_pmfs(tree_path, cc_path)
     root_genome = make_root_genome(args.root_mode, tree, cc_path, real_genomes=real_genomes)
+    tree_genome_ids = [
+        leaf.name for leaf in tree.get_terminals() if leaf.name in real_genomes
+    ]
+    selected_root_genome_id = (
+        observed_medoid_genome_id(real_genomes, tree_genome_ids)
+        if args.root_mode == "observed_medoid" else ""
+    )
+    all_observed_ids = {
+        gene_id for genome_id in tree_genome_ids for gene_id in real_genomes[genome_id]
+    }
+    next_gene_id_start = max(all_observed_ids, default=0) + 1
 
     core_gene_ids = None
     empirical_core_count = 0
     root_core_count = 0
     if args.core_mode == "empirical":
-        tree_genome_ids = [
-            leaf.name for leaf in tree.get_terminals() if leaf.name in real_genomes
-        ]
-        core_gene_ids = empirical_core_gene_ids(
+        empirical_ids = empirical_core_gene_ids(
             real_genomes,
             genome_ids=tree_genome_ids,
             min_prevalence=args.core_prevalence,
         )
-        empirical_core_count = len(core_gene_ids)
-        root_core_count = len(set(root_genome) & core_gene_ids)
+        empirical_core_count = len(empirical_ids)
+        core_gene_ids = empirical_ids.intersection(root_genome)
+        root_core_count = len(core_gene_ids)
         if root_core_count == 0:
             raise ValueError(
                 "The empirical core has no COG IDs in the selected root genome. "
@@ -162,6 +173,7 @@ def main() -> None:
             args.core_fraction,
             args.core_protection,
             core_gene_ids,
+            next_gene_id_start,
         ))
 
     with Pool(processes=len(payloads)) as pool:
@@ -171,7 +183,8 @@ def main() -> None:
     dataset = os.path.basename(os.path.normpath(atgc_dir))
 
     fieldnames = [
-        "dataset", "root_mode", "rf", "rt", "inv_rate", "n_runs", "workers",
+        "dataset", "root_mode", "selected_root_genome_id", "root_genome_length",
+        "next_gene_id_start", "rf", "rt", "inv_rate", "n_runs", "workers",
         "core_fraction", "core_protection", "core_mode", "core_prevalence",
         "empirical_core_count", "root_core_count", "root_core_fraction",
         "sum_w1", "avg_w1", "n_pairs", "skipped_real", "skipped_sim",
@@ -193,6 +206,9 @@ def main() -> None:
         writer.writerow({
             "dataset": dataset,
             "root_mode": args.root_mode,
+            "selected_root_genome_id": selected_root_genome_id,
+            "root_genome_length": len(root_genome),
+            "next_gene_id_start": next_gene_id_start,
             "rf": f"{args.rf:.10g}",
             "rt": f"{args.rt:.10g}",
             "inv_rate": f"{args.inv_rate:.10g}",
