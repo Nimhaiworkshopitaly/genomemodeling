@@ -311,9 +311,14 @@ def run_simulation(
     per_gene_trans_rate=0.0,
     gain_exp=2.0, loss_exp=2.0, inv_exp=2.0, trans_exp=2.0,
     core_fraction=0.0, core_protection=0.0, core_gene_ids=None,
+    next_gene_id_start=None,
     inversion_size_mode="powerlaw"
 ):
-    next_gene_id_holder = [len(root_genome) + 1]
+    if next_gene_id_start is None:
+        numeric_ids = [gene_numeric_id(gene) for gene in root_genome]
+        numeric_ids = [gene_id for gene_id in numeric_ids if gene_id is not None]
+        next_gene_id_start = max(numeric_ids, default=0) + 1
+    next_gene_id_holder = [int(next_gene_id_start)]
 
     genomes = evolve_genome(
         tree, root_genome,
