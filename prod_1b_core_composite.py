@@ -93,6 +93,61 @@ def empirical_core_gene_ids(real_genomes, genome_ids=None, min_prevalence=1.0):
     return {gene_id for gene_id, count in presence.items() if count >= minimum_count}
 
 
+def _jaccard_distance(left, right):
+    union = left | right
+    return 0.0 if not union else 1.0 - len(left & right) / len(union)
+
+
+def _circular_adjacencies(genome):
+    """Return orientation-independent adjacencies for one circular genome."""
+    if len(genome) < 2:
+        return set()
+    return {
+        tuple(sorted((genome[index], genome[(index + 1) % len(genome)])))
+        for index in range(len(genome))
+        if genome[index] != genome[(index + 1) % len(genome)]
+    }
+
+
+def observed_medoid_genome_id(real_genomes, genome_ids=None):
+    """Select the observed genome closest to the group in content and adjacency."""
+    selected = sorted(real_genomes) if genome_ids is None else sorted(
+        genome_id for genome_id in genome_ids if genome_id in real_genomes
+    )
+    if not selected:
+        raise ValueError("No observed genomes are available for medoid selection.")
+
+    genomes = {
+        genome_id: convert_to_numeric(real_genomes[genome_id])
+        for genome_id in selected
+    }
+    contents = {genome_id: set(genome) for genome_id, genome in genomes.items()}
+    adjacencies = {
+        genome_id: _circular_adjacencies(genome)
+        for genome_id, genome in genomes.items()
+    }
+    median_length = float(np.median([len(genome) for genome in genomes.values()]))
+    rankings = []
+    for genome_id in selected:
+        distances = []
+        for other_id in selected:
+            if other_id == genome_id:
+                continue
+            content_distance = _jaccard_distance(
+                contents[genome_id], contents[other_id]
+            )
+            adjacency_distance = _jaccard_distance(
+                adjacencies[genome_id], adjacencies[other_id]
+            )
+            distances.append(0.5 * (content_distance + adjacency_distance))
+        rankings.append((
+            float(np.mean(distances)) if distances else 0.0,
+            abs(len(genomes[genome_id]) - median_length),
+            genome_id,
+        ))
+    return min(rankings)[2]
+
+
 def lengths_to_pmf(lengths):
     """
     list[int] -> (vals[np.int64], probs[np.float64]) for discrete pmf.
@@ -448,7 +503,7 @@ def build_real_pmfs(tree_path, cc_path, synteny_finder=findSyntenyReal2, genomes
 
 def make_root_genome(root_mode, tree, cc_path, real_genomes=None):
     """
-    root_mode: "median_synthetic" or "from_info_tab"
+    root_mode: "median_synthetic", "from_info_tab", or "observed_medoid"
     Returns list[int] root genome (integer labels, 1..L0 or from real genome IDs).
     """
     if real_genomes is None:
@@ -463,6 +518,16 @@ def make_root_genome(root_mode, tree, cc_path, real_genomes=None):
             gid = first_line.split()[0]
         root_seq = convert_to_numeric(real_genomes[gid])
         return root_seq
+
+    if root_mode == "observed_medoid":
+        tree_genome_ids = [
+            leaf.name for leaf in tree.get_terminals() if leaf.name in real_genomes
+        ]
+        genome_id = observed_medoid_genome_id(real_genomes, tree_genome_ids)
+        return convert_to_numeric(real_genomes[genome_id])
+
+    if root_mode != "median_synthetic":
+        raise ValueError(f"Unknown root mode: {root_mode}")
 
     # default: median_synthetic
     med_len = int(np.median([len(convert_to_numeric(v)) for v in real_genomes.values()]))
