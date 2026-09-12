@@ -10,9 +10,10 @@ import random
 import time
 
 
-def sample_truncated_powerlaw(L0, alpha=2.0):
+def sample_truncated_powerlaw(L0, alpha=2.0, min_size=1):
     k_max = max(1, L0 // 2)
-    ks = np.arange(1, k_max + 1)
+    min_size = min(max(1, int(min_size)), k_max)
+    ks = np.arange(min_size, k_max + 1)
     weights = ks ** (-alpha)
     weights /= weights.sum()
     return int(np.random.choice(ks, p=weights))
@@ -34,6 +35,28 @@ def sample_uniform_breakpoint_inversion(genome_length):
         length = (end - start) % genome_length
         if length >= 2:
             return start, length
+
+
+def sample_geometric_inversion(genome_length, mean_size=10.0, min_size=2):
+    """Sample a geometric inversion length, truncated to the circular genome."""
+    max_size = genome_length - 1
+    if max_size < min_size:
+        return None
+    mean_size = max(float(mean_size), float(min_size))
+    probability = 1.0 / (mean_size - min_size + 1.0)
+    length = min_size - 1 + int(np.random.geometric(probability))
+    return min(length, max_size)
+
+
+def sample_lognormal_inversion(
+    genome_length, median_size=10.0, sigma=1.0, min_size=2
+):
+    """Sample a log-normal inversion length, truncated to the circular genome."""
+    max_size = genome_length - 1
+    if max_size < min_size:
+        return None
+    length = int(round(np.random.lognormal(np.log(median_size), sigma)))
+    return min(max(length, min_size), max_size)
 
 
 def gene_numeric_id(gene):
@@ -97,7 +120,9 @@ def evolve_genome_branch(
     genome, branch_length, gain_rate, loss_rate, inv_rate, trans_rate,
     gain_exp, loss_exp, inv_exp, trans_exp, next_gene_id_holder, L0_ancestral,
     core_gene_ids=None, core_protection=0.0,
-    inversion_size_mode="powerlaw"
+    inversion_size_mode="powerlaw", inversion_geometric_mean=10.0,
+    inversion_lognormal_median=10.0, inversion_lognormal_sigma=1.0,
+    inversion_min_size=1,
 ):
     genome = genome.copy()
     core_gene_ids = core_gene_ids or set()
@@ -123,12 +148,29 @@ def evolve_genome_branch(
                 continue
             loc_point, k = inversion
 
+        elif event == "I" and inversion_size_mode == "geometric":
+            k = sample_geometric_inversion(
+                Lc, inversion_geometric_mean, inversion_min_size
+            )
+            if k is None:
+                continue
+
+        elif event == "I" and inversion_size_mode == "lognormal":
+            k = sample_lognormal_inversion(
+                Lc, inversion_lognormal_median, inversion_lognormal_sigma,
+                inversion_min_size,
+            )
+            if k is None:
+                continue
+
         elif event == "G":
             k = sample_truncated_powerlaw(L0_ancestral, gain_exp)
         elif event == "L":
             k = sample_truncated_powerlaw(L0_ancestral, loss_exp)
         elif event == "I":
-            k = sample_truncated_powerlaw(L0_ancestral, inv_exp)
+            k = sample_truncated_powerlaw(
+                L0_ancestral, inv_exp, inversion_min_size
+            )
         else:
             k = sample_truncated_powerlaw(L0_ancestral, trans_exp)
 
@@ -206,7 +248,9 @@ def evolve_genome(
     per_gene_inv_rate, per_gene_trans_rate, gain_exp, loss_exp, inv_exp,
     trans_exp, next_gene_id_holder, core_fraction=0.0, core_protection=0.0,
     core_gene_ids=None,
-    inversion_size_mode="powerlaw"
+    inversion_size_mode="powerlaw", inversion_geometric_mean=10.0,
+    inversion_lognormal_median=10.0, inversion_lognormal_sigma=1.0,
+    inversion_min_size=1,
 ):
     genomes = {}
     num_genes = len(root_genome)
@@ -238,7 +282,11 @@ def evolve_genome(
                 L0_ancestral,
                 core_gene_ids=core_gene_ids,
                 core_protection=core_protection,
-                inversion_size_mode=inversion_size_mode
+                inversion_size_mode=inversion_size_mode,
+                inversion_geometric_mean=inversion_geometric_mean,
+                inversion_lognormal_median=inversion_lognormal_median,
+                inversion_lognormal_sigma=inversion_lognormal_sigma,
+                inversion_min_size=inversion_min_size,
             )
             genomes[child] = child_genome
     return genomes
@@ -312,7 +360,9 @@ def run_simulation(
     gain_exp=2.0, loss_exp=2.0, inv_exp=2.0, trans_exp=2.0,
     core_fraction=0.0, core_protection=0.0, core_gene_ids=None,
     next_gene_id_start=None,
-    inversion_size_mode="powerlaw"
+    inversion_size_mode="powerlaw", inversion_geometric_mean=10.0,
+    inversion_lognormal_median=10.0, inversion_lognormal_sigma=1.0,
+    inversion_min_size=1,
 ):
     if next_gene_id_start is None:
         numeric_ids = [gene_numeric_id(gene) for gene in root_genome]
@@ -328,7 +378,11 @@ def run_simulation(
         core_fraction=core_fraction,
         core_protection=core_protection,
         core_gene_ids=core_gene_ids,
-        inversion_size_mode=inversion_size_mode
+        inversion_size_mode=inversion_size_mode,
+        inversion_geometric_mean=inversion_geometric_mean,
+        inversion_lognormal_median=inversion_lognormal_median,
+        inversion_lognormal_sigma=inversion_lognormal_sigma,
+        inversion_min_size=inversion_min_size,
     )
 
     leaves = tree.get_terminals()
