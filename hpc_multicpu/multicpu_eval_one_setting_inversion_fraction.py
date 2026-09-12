@@ -40,13 +40,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--inversion-fraction", type=float, required=True)
     parser.add_argument("--translocation-exp", type=float, default=1e9)
     parser.add_argument("--inversion-exp", type=float, default=3.0)
+    parser.add_argument("--inversion-geometric-mean", type=float, default=10.0)
+    parser.add_argument("--inversion-lognormal-median", type=float, default=10.0)
+    parser.add_argument("--inversion-lognormal-sigma", type=float, default=1.0)
+    parser.add_argument("--inversion-min-size", type=int, default=1)
     parser.add_argument(
         "--inversion-size-mode",
-        choices=("powerlaw", "uniform_breakpoints"),
+        choices=("powerlaw", "geometric", "lognormal", "uniform_breakpoints"),
         default="uniform_breakpoints",
         help=(
             "Use two uniform ordered breakpoints (resampling invisible "
-            "length-one inversions) or the legacy power-law size sampler."
+            "length-one inversions), or a power-law, geometric, or log-normal "
+            "inversion-length distribution."
         ),
     )
     parser.add_argument("--gain-loss-exp", type=float, default=1e9)
@@ -76,6 +81,12 @@ def parse_args() -> argparse.Namespace:
         parser.error("rates must be non-negative")
     if min(args.translocation_exp, args.inversion_exp, args.gain_loss_exp) <= 0:
         parser.error("event-size exponents must be positive")
+    if args.inversion_geometric_mean < args.inversion_min_size:
+        parser.error("--inversion-geometric-mean must be >= --inversion-min-size")
+    if args.inversion_lognormal_median <= 0 or args.inversion_lognormal_sigma <= 0:
+        parser.error("log-normal median and sigma must be positive")
+    if args.inversion_min_size < 1:
+        parser.error("--inversion-min-size must be positive")
     if args.n_runs < 1 or args.workers < 1:
         parser.error("n-runs and workers must be positive")
     if not 0.0 < args.core_prevalence <= 1.0:
@@ -92,7 +103,9 @@ def split_counts(total: int, chunks: int) -> list[int]:
 def worker_simulate(payload):
     (
         tree, root_genome, rf, translocation_rate, inversion_rate,
-        translocation_exp, inversion_exp, inversion_size_mode, gain_loss_exp,
+        translocation_exp, inversion_exp, inversion_size_mode,
+        inversion_geometric_mean, inversion_lognormal_median,
+        inversion_lognormal_sigma, inversion_min_size, gain_loss_exp,
         core_fraction, core_protection, core_gene_ids, next_gene_id_start,
         n_runs, seed,
     ) = payload
@@ -119,6 +132,10 @@ def worker_simulate(payload):
             core_gene_ids=core_gene_ids,
             next_gene_id_start=next_gene_id_start,
             inversion_size_mode=inversion_size_mode,
+            inversion_geometric_mean=inversion_geometric_mean,
+            inversion_lognormal_median=inversion_lognormal_median,
+            inversion_lognormal_sigma=inversion_lognormal_sigma,
+            inversion_min_size=inversion_min_size,
         )
         for (genome_a, genome_b), lengths in simulated_pairs.items():
             pair = tuple(sorted((genome_a, genome_b)))
@@ -184,6 +201,8 @@ def main() -> None:
         payloads.append((
             tree, root_genome, args.rf, translocation_rate, inversion_rate,
             args.translocation_exp, args.inversion_exp, args.inversion_size_mode,
+            args.inversion_geometric_mean, args.inversion_lognormal_median,
+            args.inversion_lognormal_sigma, args.inversion_min_size,
             args.gain_loss_exp, args.core_fraction, args.core_protection,
             core_gene_ids, next_gene_id_start, count, worker_seed,
         ))
@@ -207,6 +226,10 @@ def main() -> None:
         "translocation_exp": args.translocation_exp,
         "inversion_exp": args.inversion_exp,
         "inversion_size_mode": args.inversion_size_mode,
+        "inversion_geometric_mean": args.inversion_geometric_mean,
+        "inversion_lognormal_median": args.inversion_lognormal_median,
+        "inversion_lognormal_sigma": args.inversion_lognormal_sigma,
+        "inversion_min_size": args.inversion_min_size,
         "gain_loss_exp": args.gain_loss_exp,
         "core_fraction": args.core_fraction,
         "core_protection": args.core_protection,
