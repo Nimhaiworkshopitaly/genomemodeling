@@ -18,31 +18,33 @@ MODEL_LABELS = {
     "uniform_breakpoints": "Uniform breakpoints",
 }
 
-RESULTS = Path(
-    "hpc_multicpu/results_focused_inversion_size_observed_medoid_empirical_core"
-)
-FIGURES = Path(
-    "hpc_multicpu/figures_focused_inversion_size_observed_medoid_empirical_core"
-)
-SWARM = Path(
-    "hpc_multicpu/jobs_focused_inversion_size_observed_medoid_empirical_core.swarm"
-)
+def locations(rf):
+    base = "focused_inversion_size_observed_medoid_empirical_core"
+    if rf != 0.1:
+        rate_token = f"{rf:g}".replace(".", "p")
+        base = f"{base}_rf_{rate_token}"
+    return (
+        Path("hpc_multicpu") / f"results_{base}",
+        Path("hpc_multicpu") / f"figures_{base}",
+        Path("hpc_multicpu") / f"jobs_{base}.swarm",
+    )
 
 
-def result_path(model, translocation_rate, inversion_rate, seed):
-    return RESULTS / (
+def result_path(results, model, translocation_rate, inversion_rate, seed):
+    return results / (
         f"result_{model}_t_{translocation_rate:.2f}_"
         f"i_{inversion_rate:.3f}_seed_{seed}.csv"
     )
 
 
-def make_jobs():
+def make_jobs(rf):
     evaluator = Path(
         "hpc_multicpu/multicpu_eval_one_setting_inversion_fraction.py"
     )
     if not evaluator.is_file():
         raise SystemExit("Run this command from the genomemodeling root.")
-    RESULTS.mkdir(parents=True, exist_ok=True)
+    results, _, swarm = locations(rf)
+    results.mkdir(parents=True, exist_ok=True)
     commands = []
     skipped = 0
     for model in SIZE_MODELS:
@@ -52,7 +54,7 @@ def make_jobs():
                 fraction = inversion_rate / total
                 for seed in SEEDS:
                     output = result_path(
-                        model, translocation_rate, inversion_rate, seed
+                        results, model, translocation_rate, inversion_rate, seed
                     )
                     if output.exists() and output.stat().st_size > 0:
                         skipped += 1
@@ -62,7 +64,7 @@ def make_jobs():
                         "--atgc-dir", "ATGC0070",
                         "--tree-filename", "yuri_gl26/ATGC0070.gl.tre",
                         "--root-mode", "observed_medoid",
-                        "--rf", "0.1",
+                        "--rf", f"{rf:g}",
                         "--total-rearrangement-rate", f"{total:.12g}",
                         "--inversion-fraction", f"{fraction:.12g}",
                         "--translocation-exp", "1e9",
@@ -80,22 +82,23 @@ def make_jobs():
                         "--n-runs", "100", "--workers", "16",
                         "--seed", str(seed), "--out-csv", str(output),
                     ]))
-    SWARM.write_text("\n".join(commands) + ("\n" if commands else ""))
-    print(f"Wrote {len(commands)} jobs: {SWARM}")
+    swarm.write_text("\n".join(commands) + ("\n" if commands else ""))
+    print(f"Wrote {len(commands)} jobs: {swarm}")
     print(f"Skipped {skipped}; complete grid = 300 jobs.")
 
 
-def load_results():
+def load_results(rf):
     import numpy as np
     import pandas as pd
 
+    results, _, _ = locations(rf)
     frames = []
     for model in SIZE_MODELS:
         for translocation_rate in TRANSLOCATION_RATES:
             for inversion_rate in INVERSION_RATES:
                 for seed in SEEDS:
                     path = result_path(
-                        model, translocation_rate, inversion_rate, seed
+                        results, model, translocation_rate, inversion_rate, seed
                     )
                     if not path.is_file() or path.stat().st_size == 0:
                         continue
@@ -108,7 +111,7 @@ def load_results():
                     frame["source_file"] = str(path)
                     frames.append(frame)
     if not frames:
-        raise SystemExit(f"No results found in {RESULTS}")
+        raise SystemExit(f"No results found in {results}")
     data = pd.concat(frames, ignore_index=True)
     keys = [
         "requested_size_model", "requested_translocation_rate",
@@ -136,19 +139,20 @@ def load_results():
         raise ValueError("Some results do not use empirical core COGs.")
     if not np.allclose(data["core_protection"], 0.9):
         raise ValueError("Some results do not use core protection 0.9.")
-    if not np.allclose(data["rf"], 0.1):
-        raise ValueError("Some results do not use gain/loss rate 0.1.")
+    if not np.allclose(data["rf"], rf):
+        raise ValueError(f"Some results do not use gain/loss rate {rf:g}.")
     return data
 
 
-def analyze():
+def analyze(rf):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import numpy as np
 
-    data = load_results()
-    FIGURES.mkdir(parents=True, exist_ok=True)
+    data = load_results(rf)
+    _, figures, _ = locations(rf)
+    figures.mkdir(parents=True, exist_ok=True)
     metrics = [
         ("composite_score", "Composite score"),
         ("avg_ks_statistic", "KS statistic"),
@@ -163,8 +167,8 @@ def analyze():
         aggregations[f"{column}_mean"] = (column, "mean")
         aggregations[f"{column}_std"] = (column, "std")
     summary = data.groupby(group_keys, as_index=False).agg(**aggregations)
-    data.to_csv(FIGURES / "combined_results.csv", index=False)
-    summary.to_csv(FIGURES / "mean_sd_results.csv", index=False)
+    data.to_csv(figures / "combined_results.csv", index=False)
+    summary.to_csv(figures / "mean_sd_results.csv", index=False)
 
     for column, label in metrics:
         matrices = []
@@ -176,7 +180,7 @@ def analyze():
                 values=f"{column}_mean",
             ).reindex(index=INVERSION_RATES, columns=TRANSLOCATION_RATES)
             matrices.append(matrix)
-            matrix.to_csv(FIGURES / f"{model}_{column}_values.csv")
+            matrix.to_csv(figures / f"{model}_{column}_values.csv")
 
         all_values = np.concatenate([matrix.to_numpy().ravel() for matrix in matrices])
         vmin, vmax = np.nanmin(all_values), np.nanmax(all_values)
@@ -213,16 +217,16 @@ def analyze():
             )
         fig.suptitle(
             f"{label}: observed-medoid root with empirical core protection\n"
-            "Mean across five matched seeds; gain/loss rate 0.1; lower is better"
+            f"Mean across five matched seeds; gain/loss rate {rf:g}; lower is better"
         )
         fig.colorbar(image, ax=axes, label=label, shrink=0.85)
-        output = FIGURES / f"{column}_size_model_comparison.png"
+        output = figures / f"{column}_size_model_comparison.png"
         fig.savefig(output, dpi=300)
         plt.close(fig)
         print(f"Saved: {output}")
 
     print(f"Medoid: {data['selected_root_genome_id'].iloc[0]}")
-    print(f"Saved figures and tables: {FIGURES}")
+    print(f"Saved figures and tables: {figures}")
 
 
 def main():
@@ -230,8 +234,14 @@ def main():
         description="Run or analyze the focused inversion-size grid."
     )
     parser.add_argument("action", choices=("make-jobs", "analyze"))
+    parser.add_argument(
+        "--rf", type=float, default=0.1,
+        help="Per-gene gain and loss rate (default: 0.1).",
+    )
     args = parser.parse_args()
-    (make_jobs if args.action == "make-jobs" else analyze)()
+    if args.rf <= 0:
+        parser.error("--rf must be positive")
+    (make_jobs if args.action == "make-jobs" else analyze)(args.rf)
 
 
 if __name__ == "__main__":
