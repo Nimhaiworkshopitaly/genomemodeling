@@ -157,8 +157,8 @@ def main():
     parser.add_argument("action", choices=("make-jobs", "status"))
     parser.add_argument("--rf", type=float, default=0.1)
     args = parser.parse_args()
-    if args.rf <= 0:
-        parser.error("--rf must be positive")
+    if not 0.01 <= args.rf <= 100:
+        parser.error("--rf must be between 0.01 and 100")
     (make_jobs if args.action == "make-jobs" else status)(args.rf)
 
 
