@@ -34,6 +34,16 @@ def rate_token(rate):
     return f"{rate:g}".replace(".", "p")
 
 
+def bounded_rf(value):
+    try:
+        rate = float(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("rf must be numeric") from error
+    if not 0.01 <= rate <= 100:
+        raise argparse.ArgumentTypeError("rf must be between 0.01 and 100")
+    return rate
+
+
 def block_results_path(rate):
     return Path(f"hpc_multicpu/results_{BLOCK_STEM}_rf_{rate_token(rate)}")
 
@@ -314,8 +324,11 @@ def main():
         "analysis", choices=("inversion-sizes", "block-translocations", "all")
     )
     parser.add_argument(
-        "--rf", nargs="+", type=float, choices=(0.1, 0.2, 0.3),
-        help="Gain/loss rates for block-translocation plots (default: all three)",
+        "--rf", nargs="+", type=bounded_rf,
+        help=(
+            "Gain/loss rates from 0.01 through 100 for block-translocation "
+            "plots (default: 0.1 0.2 0.3)"
+        ),
     )
     args = parser.parse_args()
     if args.analysis in ("inversion-sizes", "all"):
