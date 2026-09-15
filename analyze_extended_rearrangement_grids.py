@@ -27,14 +27,19 @@ INVERSION_FIGURES = Path(
     "hpc_multicpu/figures_inversion_size_parameter_grid_observed_medoid_"
     "empirical_core"
 )
-BLOCK_RESULTS = Path(
-    "hpc_multicpu/results_block_translocation_mixture_observed_medoid_"
-    "empirical_core_rf_0p1"
-)
-BLOCK_FIGURES = Path(
-    "hpc_multicpu/figures_block_translocation_mixture_observed_medoid_"
-    "empirical_core_rf_0p1"
-)
+BLOCK_STEM = "block_translocation_mixture_observed_medoid_empirical_core"
+
+
+def rate_token(rate):
+    return f"{rate:g}".replace(".", "p")
+
+
+def block_results_path(rate):
+    return Path(f"hpc_multicpu/results_{BLOCK_STEM}_rf_{rate_token(rate)}")
+
+
+def block_figures_path(rate):
+    return Path(f"hpc_multicpu/figures_{BLOCK_STEM}_rf_{rate_token(rate)}")
 
 
 def load_results(directory, expected):
@@ -244,22 +249,26 @@ def analyze_inversions():
     print(f"Saved inversion-size visualizations: {INVERSION_FIGURES}")
 
 
-def analyze_blocks():
-    data = load_results(BLOCK_RESULTS, 2250)
+def analyze_blocks(rf):
+    results = block_results_path(rf)
+    figures = block_figures_path(rf)
+    data = load_results(results, 2250)
+    if not np.allclose(pd.to_numeric(data["rf"]), rf, atol=1e-8, rtol=0):
+        raise ValueError(f"{results}: results do not all have rf={rf:g}")
     data["configuration"] = data.apply(translocation_label, axis=1)
     data["gain_configuration"] = data.apply(gain_label, axis=1)
-    BLOCK_FIGURES.mkdir(parents=True, exist_ok=True)
-    data.to_csv(BLOCK_FIGURES / "combined_results.csv", index=False)
+    figures.mkdir(parents=True, exist_ok=True)
+    data.to_csv(figures / "combined_results.csv", index=False)
 
     group_keys = [
         "rf", "gain_configuration", "configuration",
         "translocation_rate", "inversion_rate",
     ]
     mean_data = data.groupby(group_keys, as_index=False)[list(METRICS)].mean()
-    mean_data.to_csv(BLOCK_FIGURES / "mean_results.csv", index=False)
+    mean_data.to_csv(figures / "mean_results.csv", index=False)
     matched_improvements(
         data, ["gain_configuration", "configuration"],
-        BLOCK_FIGURES / "matched_seed_inversion_improvements.csv",
+        figures / "matched_seed_inversion_improvements.csv",
     )
 
     best_rows = []
@@ -270,12 +279,13 @@ def analyze_blocks():
             indices = gain_data.groupby("configuration")[metric].idxmin()
             ranking = gain_data.loc[indices].copy()
             ranking.to_csv(
-                BLOCK_FIGURES / f"{gain_token}_{metric}_ranking.csv", index=False
+                figures / f"{gain_token}_{metric}_ranking.csv", index=False
             )
             save_ranking_plot(
                 ranking, metric, label,
-                f"Block-translocation ranking; {gain}\nLower is better",
-                BLOCK_FIGURES / f"{gain_token}_{metric}_ranking.png",
+                f"Block-translocation ranking; {gain}; gain/loss rate {rf:g}\n"
+                "Lower is better",
+                figures / f"{gain_token}_{metric}_ranking.png",
             )
             best = ranking.loc[ranking[metric].idxmin()]
             best_rows.append(best)
@@ -288,13 +298,14 @@ def analyze_blocks():
             draw_heatmap(
                 table, label,
                 f"Best translocation model: {best['configuration']}\n"
-                f"{gain}; mean across five seeds; lower is better",
-                BLOCK_FIGURES / f"{gain_token}_{metric}_best_heatmap.png",
+                f"{gain}; gain/loss rate {rf:g}; mean across five seeds; "
+                "lower is better",
+                figures / f"{gain_token}_{metric}_best_heatmap.png",
             )
     pd.DataFrame(best_rows).to_csv(
-        BLOCK_FIGURES / "best_settings_by_gain_model_and_metric.csv", index=False
+        figures / "best_settings_by_gain_model_and_metric.csv", index=False
     )
-    print(f"Saved block-translocation visualizations: {BLOCK_FIGURES}")
+    print(f"Saved block-translocation visualizations for rf={rf:g}: {figures}")
 
 
 def main():
@@ -302,11 +313,16 @@ def main():
     parser.add_argument(
         "analysis", choices=("inversion-sizes", "block-translocations", "all")
     )
+    parser.add_argument(
+        "--rf", nargs="+", type=float, choices=(0.1, 0.2, 0.3),
+        help="Gain/loss rates for block-translocation plots (default: all three)",
+    )
     args = parser.parse_args()
     if args.analysis in ("inversion-sizes", "all"):
         analyze_inversions()
     if args.analysis in ("block-translocations", "all"):
-        analyze_blocks()
+        for rf in args.rf or (0.1, 0.2, 0.3):
+            analyze_blocks(rf)
 
 
 if __name__ == "__main__":
