@@ -1,13 +1,13 @@
 # Genome Modeling of Synteny-Block Distributions
 
 This repository simulates bacterial genome evolution along a phylogenetic tree
-and compares simulated synteny-block-length distributions with observed data.
+and compares simulated synteny block length distributions with observed data.
 The current analyses focus on ATGC0070 and examine how gene gain/loss,
 single-gene translocation, uniform-breakpoint inversion, and protection of
 empirical core COGs affect model fit.
 
 The main workflows are designed for parallel execution on the NIH Biowulf
-cluster. They report a composite fit score together with per-genome-pair
+cluster. They report a composite fit score together with per genome pair
 Kolmogorov-Smirnov (KS), Kuiper, and other distributional statistics.
 
 ## Main analyses
@@ -27,13 +27,13 @@ Each analysis can compare:
 ## Repository structure
 
 ```text
-ATGC0070/                         ATGC0070 input data
+ATGC0070/                        ATGC0070 input data
 hpc_multicpu/                    Biowulf swarm generators and evaluators
 simulation_core_composite.py     Genome-evolution simulation engine
 prod_1b_core_composite.py        Data loading, root selection, and scoring
 synteny_tools.py                 Synteny-block detection functions
 joint_translocation_inversion_grid_observed_medoid.py
-                                  Matched translocation/inversion workflow
+                                 Matched translocation/inversion workflow
 hpc/                             Earlier single-CPU Biowulf workflow
 hpc_optuna/                      Optuna parameter-search workflow
 legacy code/                     Historical scripts retained for reference
@@ -91,14 +91,14 @@ The simulation supports three root modes:
 - `observed_medoid` selects the observed genome with the smallest average
   dissimilarity from the other tree genomes.
 
-The observed-medoid distance gives equal weight to Jaccard distance between
-sets of observed COGs and Jaccard distance between orientation-independent
+The observed medoid distance gives equal weight to Jaccard distance between
+sets of observed COGs and Jaccard distance between orientation independent
 circular gene adjacencies. Distance from the median genome length and genome ID
 are deterministic tie-breakers. For the current ATGC0070 data and Yuri tree,
 this procedure selected `GCF_900187235.1`.
 
 The observed medoid retains real COG identities and an observed gene order,
-making it more appropriate than a synthetic root for empirical-core
+making it more appropriate than a/ synthetic root for empirical-core
 protection. It is a representative observed genome, not a reconstructed
 ancestor.
 
@@ -143,7 +143,7 @@ COGs.
 ## Fit statistics
 
 Lower values indicate a better match between observed and simulated
-synteny-block-length distributions.
+synteny block length distributions.
 
 ### Composite score
 
@@ -279,7 +279,7 @@ job can terminate without writing its expected output.
 
 ## Output files
 
-Single-setting evaluators write one summary CSV per job. Fields include rates,
+Single setting evaluators write one summary CSV per job. Fields include rates,
 seed, tree path, root mode, selected medoid, root and empirical-core counts,
 composite-score components, average KS and Kuiper statistics, and the number of
 compared genome pairs. Analysis scripts produce combined CSV tables, metric
@@ -299,7 +299,7 @@ be committed to the repository.
   rates do not guarantee matched accepted-event counts.
 - Uniform-breakpoint inversions choose two positions on a circular genome and
   reject invisible one-gene inversions.
-- Objective-landscape contours interpolate between evaluated grid points;
+- Objective landscape contours interpolate between evaluated grid points;
   reported optima should refer to sampled settings unless continuous
   optimization was performed.
 
