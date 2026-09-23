@@ -1,4 +1,4 @@
-# Genome Modeling of Synteny-Block Distributions
+# Genome Modeling of Synteny Block Distributions
 
 This repository simulates bacterial genome evolution along a phylogenetic tree
 and compares simulated synteny block length distributions with observed data.
@@ -166,7 +166,7 @@ largest positive and negative CDF deviations. Because these statistics and the
 composite score emphasize different distributional features, their best
 parameter locations need not coincide.
 
-## Observed-medoid translocation x inversion experiment
+## Observed medoid translocation x inversion experiment
 
 This workflow uses Yuri's tree, the same observed-medoid root in both
 conditions, gain and loss rates fixed at `0.1`, five translocation rates, five
