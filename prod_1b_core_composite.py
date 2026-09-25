@@ -225,6 +225,8 @@ def _distribution_distances(r_vals, r_probs, s_vals, s_probs, epsilon=1e-12):
             "hellinger_distance": float("nan"),
             "ks_statistic": float("nan"),
             "kuiper_statistic": float("nan"),
+            "cramer_von_mises_distance": float("nan"),
+            "anderson_darling_distance": float("nan"),
         }
 
     kl_real_to_sim = float(np.sum(p * np.log(p / q)))
@@ -241,6 +243,22 @@ def _distribution_distances(r_vals, r_probs, s_vals, s_probs, epsilon=1e-12):
     cdf_diff = _aligned_cdf_differences(r_vals, r_probs, s_vals, s_probs)
     ks_statistic = float(np.max(np.abs(cdf_diff)))
     kuiper_statistic = float(np.max(cdf_diff) - np.min(cdf_diff))
+    raw_p, raw_q = _aligned_smoothed_probs(
+        r_vals, r_probs, s_vals, s_probs, epsilon=0.0
+    )
+    pooled_probability = 0.5 * (raw_p + raw_q)
+    cramer_von_mises_distance = float(
+        np.sum(np.square(cdf_diff) * pooled_probability)
+    )
+    pooled_cdf = np.cumsum(pooled_probability)
+    interior = (pooled_cdf > 0.0) & (pooled_cdf < 1.0)
+    anderson_darling_distance = float(
+        np.sum(
+            np.square(cdf_diff[interior])
+            * pooled_probability[interior]
+            / (pooled_cdf[interior] * (1.0 - pooled_cdf[interior]))
+        )
+    )
 
     return {
         "kl_real_to_sim": kl_real_to_sim,
@@ -251,6 +269,8 @@ def _distribution_distances(r_vals, r_probs, s_vals, s_probs, epsilon=1e-12):
         "hellinger_distance": hellinger_distance,
         "ks_statistic": ks_statistic,
         "kuiper_statistic": kuiper_statistic,
+        "cramer_von_mises_distance": cramer_von_mises_distance,
+        "anderson_darling_distance": anderson_darling_distance,
     }
 
 
@@ -285,6 +305,8 @@ def score_real_vs_sim_counts(
     total_hellinger_distance = 0.0
     total_ks_statistic = 0.0
     total_kuiper_statistic = 0.0
+    total_cramer_von_mises_distance = 0.0
+    total_anderson_darling_distance = 0.0
     compared = 0
     skipped_real = 0
     skipped_sim = 0
@@ -333,6 +355,12 @@ def score_real_vs_sim_counts(
         total_hellinger_distance += extra_distances["hellinger_distance"]
         total_ks_statistic += extra_distances["ks_statistic"]
         total_kuiper_statistic += extra_distances["kuiper_statistic"]
+        total_cramer_von_mises_distance += extra_distances[
+            "cramer_von_mises_distance"
+        ]
+        total_anderson_darling_distance += extra_distances[
+            "anderson_darling_distance"
+        ]
         compared += 1
 
     avg_w1 = (total_w1 / compared) if compared > 0 else float("nan")
@@ -367,6 +395,14 @@ def score_real_vs_sim_counts(
     avg_kuiper_statistic = (
         total_kuiper_statistic / compared if compared > 0 else float("nan")
     )
+    avg_cramer_von_mises_distance = (
+        total_cramer_von_mises_distance / compared
+        if compared > 0 else float("nan")
+    )
+    avg_anderson_darling_distance = (
+        total_anderson_darling_distance / compared
+        if compared > 0 else float("nan")
+    )
 
     return {
         "sum_w1": total_w1,
@@ -386,6 +422,8 @@ def score_real_vs_sim_counts(
         "avg_hellinger_distance": avg_hellinger_distance,
         "avg_ks_statistic": avg_ks_statistic,
         "avg_kuiper_statistic": avg_kuiper_statistic,
+        "avg_cramer_von_mises_distance": avg_cramer_von_mises_distance,
+        "avg_anderson_darling_distance": avg_anderson_darling_distance,
         "distribution_smoothing_epsilon": smoothing_epsilon,
         "short_cdf_length": short_cdf_length,
         "long_tail_length": long_tail_length,
