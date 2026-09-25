@@ -319,6 +319,12 @@ def main() -> None:
         "avg_hellinger_distance": scores["avg_hellinger_distance"],
         "avg_ks_statistic": scores["avg_ks_statistic"],
         "avg_kuiper_statistic": scores["avg_kuiper_statistic"],
+        "avg_cramer_von_mises_distance": scores[
+            "avg_cramer_von_mises_distance"
+        ],
+        "avg_anderson_darling_distance": scores[
+            "avg_anderson_darling_distance"
+        ],
         "n_pairs": scores["n_pairs"],
         "skipped_real": scores["skipped_real"],
         "skipped_sim": scores["skipped_sim"],
@@ -338,7 +344,9 @@ def main() -> None:
         f"inv_size_mode={args.inversion_size_mode}, "
         f"core_mode={args.core_mode}, root_core={root_core_count}, "
         f"KS={scores['avg_ks_statistic']:.5g}, "
-        f"Kuiper={scores['avg_kuiper_statistic']:.5g}"
+        f"Kuiper={scores['avg_kuiper_statistic']:.5g}, "
+        f"CvM={scores['avg_cramer_von_mises_distance']:.5g}, "
+        f"AD={scores['avg_anderson_darling_distance']:.5g}"
     )
 
 
