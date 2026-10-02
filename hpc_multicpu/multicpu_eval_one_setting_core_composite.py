@@ -23,6 +23,7 @@ if REPO_ROOT not in sys.path:
 
 from prod_1b_core_composite import (  # noqa: E402
     build_real_pmfs,
+    convert_to_numeric,
     empirical_core_gene_ids,
     make_root_genome,
     observed_medoid_genome_id,
@@ -39,6 +40,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tree-filename", default="atgc.iq.r.tre")
     parser.add_argument("--cc-filename", default="atgc.cc.csv")
     parser.add_argument("--root-mode", default="median_synthetic")
+    parser.add_argument(
+        "--root-genome-id",
+        default=None,
+        help="Use this observed genome explicitly as the simulation root.",
+    )
     parser.add_argument("--rf", type=float, required=True)
     parser.add_argument("--rt", type=float, required=True)
     parser.add_argument("--inv-rate", type=float, default=0.0)
@@ -125,14 +131,25 @@ def main() -> None:
     os.makedirs(os.path.dirname(os.path.abspath(args.out_csv)), exist_ok=True)
 
     real_pmfs, tree, real_genomes, med_path = build_real_pmfs(tree_path, cc_path)
-    root_genome = make_root_genome(args.root_mode, tree, cc_path, real_genomes=real_genomes)
     tree_genome_ids = [
         leaf.name for leaf in tree.get_terminals() if leaf.name in real_genomes
     ]
-    selected_root_genome_id = (
-        observed_medoid_genome_id(real_genomes, tree_genome_ids)
-        if args.root_mode == "observed_medoid" else ""
-    )
+    if args.root_genome_id:
+        if args.root_genome_id not in tree_genome_ids:
+            raise ValueError(
+                f"Requested root genome {args.root_genome_id!r} is not an "
+                "observed tree genome."
+            )
+        root_genome = convert_to_numeric(real_genomes[args.root_genome_id])
+        selected_root_genome_id = args.root_genome_id
+    else:
+        root_genome = make_root_genome(
+            args.root_mode, tree, cc_path, real_genomes=real_genomes
+        )
+        selected_root_genome_id = (
+            observed_medoid_genome_id(real_genomes, tree_genome_ids)
+            if args.root_mode == "observed_medoid" else ""
+        )
     all_observed_ids = {
         gene_id for genome_id in tree_genome_ids for gene_id in real_genomes[genome_id]
     }
