@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
 import random
 import sys
 from collections import Counter, defaultdict
 from multiprocessing import Pool
+from pathlib import Path
 
 import numpy as np
 
@@ -45,6 +47,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Use this observed genome explicitly as the simulation root.",
     )
+    parser.add_argument(
+        "--root-genome-file",
+        default=None,
+        help="JSON file containing an explicit ordered list of numeric COG IDs.",
+    )
     parser.add_argument("--rf", type=float, required=True)
     parser.add_argument("--rt", type=float, required=True)
     parser.add_argument("--inv-rate", type=float, default=0.0)
@@ -67,7 +74,10 @@ def parse_args() -> argparse.Namespace:
         help="Minimum genome prevalence for empirical core COGs (1.0 = strict core).",
     )
     parser.add_argument("--out-csv", required=True)
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.root_genome_id and args.root_genome_file:
+        parser.error("use only one of --root-genome-id and --root-genome-file")
+    return args
 
 
 def split_counts(total: int, chunks: int) -> list[int]:
@@ -134,7 +144,13 @@ def main() -> None:
     tree_genome_ids = [
         leaf.name for leaf in tree.get_terminals() if leaf.name in real_genomes
     ]
-    if args.root_genome_id:
+    if args.root_genome_file:
+        with open(args.root_genome_file) as handle:
+            root_genome = convert_to_numeric(json.load(handle))
+        if len(root_genome) < 2:
+            raise ValueError("The explicit root-genome file contains fewer than 2 genes")
+        selected_root_genome_id = f"synthetic:{Path(args.root_genome_file).stem}"
+    elif args.root_genome_id:
         if args.root_genome_id not in tree_genome_ids:
             raise ValueError(
                 f"Requested root genome {args.root_genome_id!r} is not an "
@@ -211,6 +227,7 @@ def main() -> None:
         "avg_js_divergence", "avg_bhattacharyya_coefficient",
         "avg_bhattacharyya_distance", "avg_hellinger_distance",
         "avg_ks_statistic", "avg_kuiper_statistic",
+        "avg_cramer_von_mises_distance", "avg_anderson_darling_distance",
         "distribution_smoothing_epsilon",
         "short_cdf_length", "long_tail_length",
         "composite_w_w1", "composite_w_singleton",
@@ -255,6 +272,12 @@ def main() -> None:
             "avg_hellinger_distance": f"{scores['avg_hellinger_distance']:.12g}",
             "avg_ks_statistic": f"{scores['avg_ks_statistic']:.12g}",
             "avg_kuiper_statistic": f"{scores['avg_kuiper_statistic']:.12g}",
+            "avg_cramer_von_mises_distance": (
+                f"{scores['avg_cramer_von_mises_distance']:.12g}"
+            ),
+            "avg_anderson_darling_distance": (
+                f"{scores['avg_anderson_darling_distance']:.12g}"
+            ),
             "distribution_smoothing_epsilon": f"{scores['distribution_smoothing_epsilon']:.3g}",
             "short_cdf_length": scores["short_cdf_length"],
             "long_tail_length": scores["long_tail_length"],
