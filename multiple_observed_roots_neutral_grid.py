@@ -38,6 +38,8 @@ METRICS = (
     ("composite_score", "Composite score"),
     ("avg_ks_statistic", "KS statistic"),
     ("avg_kuiper_statistic", "Kuiper statistic"),
+    ("avg_cramer_von_mises_distance", "Cramer-von Mises distance"),
+    ("avg_anderson_darling_distance", "Anderson-Darling distance"),
 )
 
 
