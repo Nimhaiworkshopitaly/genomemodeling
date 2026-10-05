@@ -273,9 +273,14 @@ def analyze() -> None:
             if finite.empty:
                 unavailable_roots.append(genome_id)
                 continue
-            matrix = subset.pivot(index="rf", columns="rt", values=metric).reindex(
-                index=RF_VALUES, columns=RT_VALUES
-            )
+            matrix = subset.pivot(index="rf", columns="rt", values=metric)
+            matrix = matrix.sort_index().sort_index(axis=1)
+            expected_shape = (len(RF_VALUES), len(RT_VALUES))
+            if matrix.shape != expected_shape:
+                raise ValueError(
+                    f"{genome_id}, {metric}: expected landscape shape "
+                    f"{expected_shape}, found {matrix.shape}"
+                )
             matrices.append(matrix.to_numpy())
             optima.append(subset.loc[finite.idxmin()])
         if unavailable_roots:
