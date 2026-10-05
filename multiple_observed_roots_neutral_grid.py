@@ -237,9 +237,23 @@ def analyze() -> None:
     roots, data = load_complete_results()
     FIGURES.mkdir(parents=True, exist_ok=True)
     data.to_csv(FIGURES / "combined_results.csv", index=False)
+    available_metrics = []
+    for metric, label in METRICS:
+        if metric not in data.columns:
+            print(f"Skipping {metric}: column is absent from the result files")
+            continue
+        values = pd.to_numeric(data[metric], errors="coerce").replace(
+            [np.inf, -np.inf], np.nan
+        )
+        if not values.notna().any():
+            print(f"Skipping {metric}: column has no finite values")
+            continue
+        available_metrics.append((metric, label))
+    if not available_metrics:
+        raise SystemExit("No plottable metric columns were found")
     means = data.groupby(
         ["selected_root_genome_id", "rf", "rt"], as_index=False
-    )[[metric for metric, _ in METRICS]].mean()
+    )[[metric for metric, _ in available_metrics]].mean()
     means.to_csv(FIGURES / "mean_results.csv", index=False)
 
     n_roots = len(roots)
@@ -248,15 +262,28 @@ def analyze() -> None:
     x = np.log10(np.asarray(RT_VALUES))
     y = np.log10(np.asarray(RF_VALUES))
     xx, yy = np.meshgrid(x, y)
-    for metric, label in METRICS:
+    for metric, label in available_metrics:
         matrices, optima = [], []
+        unavailable_roots = []
         for genome_id in roots["genome_id"]:
             subset = means[means["selected_root_genome_id"].astype(str).eq(genome_id)]
+            finite = pd.to_numeric(subset[metric], errors="coerce").replace(
+                [np.inf, -np.inf], np.nan
+            ).dropna()
+            if finite.empty:
+                unavailable_roots.append(genome_id)
+                continue
             matrix = subset.pivot(index="rf", columns="rt", values=metric).reindex(
                 index=RF_VALUES, columns=RT_VALUES
             )
             matrices.append(matrix.to_numpy())
-            optima.append(subset.loc[subset[metric].idxmin()])
+            optima.append(subset.loc[finite.idxmin()])
+        if unavailable_roots:
+            print(
+                f"Skipping {metric}: no finite values for "
+                + ", ".join(unavailable_roots)
+            )
+            continue
         all_values = np.concatenate([matrix.ravel() for matrix in matrices])
         norm = Normalize(float(np.nanmin(all_values)), float(np.nanmax(all_values)))
         levels = np.linspace(norm.vmin, norm.vmax, 18)
