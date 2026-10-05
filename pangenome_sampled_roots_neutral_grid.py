@@ -35,6 +35,7 @@ RESULTS = ROOT / "results"
 PARTS = ROOT / "parts"
 FIGURES = ROOT / "figures"
 EVALUATOR = Path("hpc_multicpu/multicpu_eval_one_setting_core_composite.py")
+ROOT_MODE = "pangenome_sampled"
 
 
 def observed_genomes():
@@ -203,7 +204,7 @@ def make_jobs(jobs_per_part):
                         sys.executable, str(EVALUATOR.resolve()),
                         "--atgc-dir", "ATGC0070",
                         "--tree-filename", "yuri_gl26/ATGC0070.gl.tre",
-                        "--root-mode", "pangenome_sampled",
+                        "--root-mode", ROOT_MODE,
                         "--root-genome-file", root.root_file,
                         "--rf", f"{rf:.12g}", "--rt", f"{rt:.12g}",
                         "--inv-rate", "0", "--huge-exp", "1e9",
@@ -257,7 +258,11 @@ def load_results():
     return roots, data
 
 
-def analyze():
+def analyze(
+    landscape_description="pangenome-sampled starting genomes",
+    filename_suffix="pangenome_sampled_roots_neutral",
+    root_title="Synthetic root",
+):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -328,7 +333,7 @@ def analyze():
                        marker="*", s=360, facecolors="none", edgecolors="red",
                        linewidths=2.4, zorder=5)
             ax.set_title(
-                f"Synthetic root {root.root_index}; length={root.genome_length}\n"
+                f"{root_title} {root.root_index}; length={root.genome_length}\n"
                 f"best={optimum[metric]:.5g}; rf={optimum['rf']:.5g}; "
                 f"rt={optimum['rt']:.5g}", fontsize=12,
             )
@@ -347,11 +352,11 @@ def analyze():
         colorbar = fig.colorbar(contour, ax=axes, shrink=0.82, pad=0.02)
         colorbar.set_label(label)
         fig.suptitle(
-            f"{label} landscapes across pangenome-sampled starting genomes\n"
+            f"{label} landscapes across {landscape_description}\n"
             "Neutral model: no core protection; mean across five matched seeds; "
             "lower is better", fontsize=17,
         )
-        stem = FIGURES / f"{metric}_pangenome_sampled_roots_neutral"
+        stem = FIGURES / f"{metric}_{filename_suffix}"
         fig.savefig(stem.with_suffix(".png"), dpi=300, bbox_inches="tight")
         fig.savefig(stem.with_suffix(".pdf"), bbox_inches="tight")
         plt.close(fig)
