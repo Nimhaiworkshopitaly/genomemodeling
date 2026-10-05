@@ -174,7 +174,7 @@ def calibrated_rates(tree, states, turnover_depth):
     )
 
 
-def generate_roots(n_roots, turnover_depth):
+def generate_roots(n_roots, turnover_depth, include_map=True):
     tree, leaf_names, genomes = observed_data()
     cog_sets = {name: set(genomes[name]) for name in leaf_names}
     edge_sets = {name: circular_edges(genomes[name]) for name in leaf_names}
@@ -224,9 +224,12 @@ def generate_roots(n_roots, turnover_depth):
     rows = []
     observed_lengths = np.asarray([len(genomes[name]) for name in leaf_names])
     for index in range(n_roots):
-        seed = ROOT_SEEDS[index] if index < len(ROOT_SEEDS) else ROOT_SEEDS[-1] + index
+        seed = (
+            ROOT_SEEDS[index] if index < len(ROOT_SEEDS)
+            else ROOT_SEEDS[-1] + 1000 * (index - len(ROOT_SEEDS) + 1)
+        )
         rng = np.random.default_rng(seed)
-        if index == 0:
+        if index == 0 and include_map:
             target_length = int(np.median(observed_lengths))
             ranked = np.argsort(cog_probabilities)[::-1][:target_length]
             selected = {cogs[i] for i in ranked}
@@ -481,10 +484,145 @@ def analyze():
         print(f"Saved {stem.with_suffix('.png')}")
 
 
+def analyze_ensemble():
+    """Average landscapes across posterior ancestors and retain root uncertainty."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    roots, data = load_results()
+    FIGURES.mkdir(parents=True, exist_ok=True)
+    available_metrics = []
+    for metric, label in METRICS:
+        if metric not in data.columns:
+            print(f"Skipping {metric}: column is absent from the result files")
+            continue
+        values = pd.to_numeric(data[metric], errors="coerce").replace(
+            [np.inf, -np.inf], np.nan
+        )
+        if values.notna().any():
+            available_metrics.append((metric, label))
+        else:
+            print(f"Skipping {metric}: column has no finite values")
+    if not available_metrics:
+        raise SystemExit("No plottable metric columns were found")
+
+    metric_names = [metric for metric, _ in available_metrics]
+    root_means = data.groupby(
+        ["selected_root_genome_id", "rf", "rt"], as_index=False
+    )[metric_names].mean()
+    root_means.to_csv(FIGURES / "per_ancestor_mean_results.csv", index=False)
+
+    aggregate_parts = []
+    optimum_rows = []
+    root_optimum_rows = []
+    for metric, label in available_metrics:
+        grouped = root_means.groupby(["rf", "rt"])[metric]
+        summary = grouped.agg(["mean", "std", "count"]).reset_index()
+        summary["sem"] = summary["std"] / np.sqrt(summary["count"])
+        summary.insert(0, "metric", metric)
+        aggregate_parts.append(summary)
+        best = summary.loc[summary["mean"].idxmin()]
+        optimum_rows.append({
+            "metric": metric,
+            "label": label,
+            "rf": best["rf"],
+            "rt": best["rt"],
+            "ensemble_mean": best["mean"],
+            "between_ancestor_sd": best["std"],
+            "between_ancestor_sem": best["sem"],
+            "ancestors": int(best["count"]),
+        })
+        for root_id, subset in root_means.groupby("selected_root_genome_id"):
+            finite = pd.to_numeric(subset[metric], errors="coerce").dropna()
+            if finite.empty:
+                continue
+            row = subset.loc[finite.idxmin()]
+            root_optimum_rows.append({
+                "metric": metric,
+                "selected_root_genome_id": root_id,
+                "rf": row["rf"],
+                "rt": row["rt"],
+                "score": row[metric],
+            })
+
+        mean_matrix = summary.pivot(index="rf", columns="rt", values="mean")
+        sd_matrix = summary.pivot(index="rf", columns="rt", values="std")
+        mean_matrix = mean_matrix.sort_index().sort_index(axis=1)
+        sd_matrix = sd_matrix.sort_index().sort_index(axis=1)
+        expected_shape = (len(RF_VALUES), len(RT_VALUES))
+        if mean_matrix.shape != expected_shape:
+            raise ValueError(
+                f"{metric}: expected landscape shape {expected_shape}, "
+                f"found {mean_matrix.shape}"
+            )
+        x, y = np.log10(RT_VALUES), np.log10(RF_VALUES)
+        xx, yy = np.meshgrid(x, y)
+        fig, axes = plt.subplots(
+            1, 2, figsize=(15, 6.2), sharex=True, sharey=True,
+            constrained_layout=True,
+        )
+        mean_contour = axes[0].contourf(
+            xx, yy, mean_matrix.to_numpy(), levels=18, cmap="viridis_r"
+        )
+        mean_lines = axes[0].contour(
+            xx, yy, mean_matrix.to_numpy(), levels=6, colors="black",
+            linewidths=0.55, alpha=0.55,
+        )
+        axes[0].clabel(mean_lines, inline=True, fontsize=7, fmt="%.3g")
+        axes[0].scatter(
+            math.log10(float(best["rt"])), math.log10(float(best["rf"])),
+            marker="*", s=380, facecolors="none", edgecolors="red",
+            linewidths=2.4, zorder=5,
+        )
+        axes[0].set_title(
+            f"Ensemble mean\nbest={best['mean']:.5g}; "
+            f"rf={best['rf']:.5g}; rt={best['rt']:.5g}"
+        )
+        sd_contour = axes[1].contourf(
+            xx, yy, sd_matrix.to_numpy(), levels=18, cmap="magma_r"
+        )
+        axes[1].set_title("Between-ancestor standard deviation")
+        for ax in axes:
+            ax.set_xlabel("Single-gene translocation rate (rt)")
+            ax.set_xticks(x, [format_rate(value) for value in RT_VALUES],
+                          rotation=45, ha="right")
+            ax.set_yticks(y, [format_rate(value) for value in RF_VALUES])
+            ax.grid(color="white", alpha=0.16, linewidth=0.7)
+        axes[0].set_ylabel("Gene gain/loss rate (rf)")
+        fig.colorbar(mean_contour, ax=axes[0], shrink=0.84, label=label)
+        fig.colorbar(
+            sd_contour, ax=axes[1], shrink=0.84,
+            label=f"SD of {label.lower()} across ancestors",
+        )
+        fig.suptitle(
+            f"{label}: posterior ancestral-genome ensemble ({len(roots)} roots)\n"
+            "Neutral model: no core protection; lower is better",
+            fontsize=16,
+        )
+        stem = FIGURES / f"{metric}_ancestral_ensemble"
+        fig.savefig(stem.with_suffix(".png"), dpi=300, bbox_inches="tight")
+        fig.savefig(stem.with_suffix(".pdf"), bbox_inches="tight")
+        plt.close(fig)
+        print(f"Saved {stem.with_suffix('.png')}")
+
+    pd.concat(aggregate_parts, ignore_index=True).to_csv(
+        FIGURES / "ensemble_mean_and_uncertainty.csv", index=False
+    )
+    pd.DataFrame(optimum_rows).to_csv(
+        FIGURES / "ensemble_optima.csv", index=False
+    )
+    pd.DataFrame(root_optimum_rows).to_csv(
+        FIGURES / "per_ancestor_optima.csv", index=False
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "action", choices=("generate-roots", "make-jobs", "status", "analyze")
+        "action", choices=(
+            "generate-roots", "make-jobs", "status", "analyze", "analyze-ensemble"
+        )
     )
     parser.add_argument("--n-roots", type=int, default=N_ROOTS)
     parser.add_argument("--jobs-per-part", type=int, default=500)
@@ -493,13 +631,19 @@ def main():
         help=("Expected binary-state turnover across the median root-to-leaf "
               "distance during ancestral reconstruction"),
     )
+    parser.add_argument(
+        "--posterior-only", action="store_true",
+        help="Sample every root from the posterior instead of including one MAP root",
+    )
     args = parser.parse_args()
     if args.n_roots < 2:
         parser.error("--n-roots must be at least 2")
     if args.turnover_depth <= 0:
         parser.error("--turnover-depth must be positive")
     if args.action == "generate-roots":
-        roots, model = generate_roots(args.n_roots, args.turnover_depth)
+        roots, model = generate_roots(
+            args.n_roots, args.turnover_depth, include_map=not args.posterior_only
+        )
         print("Fitted ancestral models:")
         print(model.to_string(index=False))
         print("\nReconstructed roots:")
@@ -508,8 +652,10 @@ def main():
         make_jobs(args.jobs_per_part)
     elif args.action == "status":
         status()
-    else:
+    elif args.action == "analyze":
         analyze()
+    else:
+        analyze_ensemble()
 
 
 if __name__ == "__main__":
