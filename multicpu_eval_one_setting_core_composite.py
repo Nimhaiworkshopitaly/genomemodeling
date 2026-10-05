@@ -1,0 +1,400 @@
+#!/usr/bin/env python3
+"""Evaluate one rf/rt setting using multiple CPUs inside one Biowulf job.
+
+This is the multi-CPU version of hpc/eval_one_setting.py. It keeps the original
+hpc/ workflow intact.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import os
+import random
+import sys
+from collections import Counter, defaultdict
+from multiprocessing import Pool
+from pathlib import Path
+
+import numpy as np
+
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
+from prod_1b_core_composite import (  # noqa: E402
+    _circular_adjacencies,
+    _jaccard_distance,
+    build_real_pmfs,
+    convert_to_numeric,
+    empirical_core_gene_ids,
+    make_root_genome,
+    observed_medoid_genome_id,
+    score_real_vs_sim_counts,
+)
+from simulation_core_composite import run_simulation  # noqa: E402
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Evaluate one rf/rt setting with multiple worker processes."
+    )
+    parser.add_argument("--atgc-dir", required=True)
+    parser.add_argument("--tree-filename", default="atgc.iq.r.tre")
+    parser.add_argument("--cc-filename", default="atgc.cc.csv")
+    parser.add_argument("--root-mode", default="median_synthetic")
+    parser.add_argument(
+        "--root-genome-id",
+        default=None,
+        help="Use this observed genome explicitly as the simulation root.",
+    )
+    parser.add_argument(
+        "--root-genome-file",
+        default=None,
+        help="JSON file containing an explicit ordered list of numeric COG IDs.",
+    )
+    parser.add_argument(
+        "--root-sampling",
+        choices=("none", "uniform", "medoid_proximity", "phylogenetic_root"),
+        default="none",
+        help="Randomly select an observed root independently for every replicate.",
+    )
+    parser.add_argument("--rf", type=float, required=True)
+    parser.add_argument("--rt", type=float, required=True)
+    parser.add_argument("--inv-rate", type=float, default=0.0)
+    parser.add_argument("--n-runs", type=int, default=100)
+    parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--huge-exp", type=float, default=1e9)
+    parser.add_argument("--core-fraction", type=float, default=0.5)
+    parser.add_argument("--core-protection", type=float, default=0.9)
+    parser.add_argument(
+        "--core-mode",
+        choices=("synthetic_fraction", "empirical"),
+        default="synthetic_fraction",
+        help="Use the legacy synthetic fraction or COGs observed across tree genomes.",
+    )
+    parser.add_argument(
+        "--core-prevalence",
+        type=float,
+        default=1.0,
+        help="Minimum genome prevalence for empirical core COGs (1.0 = strict core).",
+    )
+    parser.add_argument("--out-csv", required=True)
+    args = parser.parse_args()
+    if args.root_genome_id and args.root_genome_file:
+        parser.error("use only one of --root-genome-id and --root-genome-file")
+    if args.root_sampling != "none" and (
+        args.root_genome_id or args.root_genome_file
+    ):
+        parser.error("--root-sampling cannot be combined with an explicit root")
+    return args
+
+
+def split_counts(total: int, chunks: int) -> list[int]:
+    chunks = max(1, min(chunks, total))
+    base = total // chunks
+    rem = total % chunks
+    return [base + (1 if i < rem else 0) for i in range(chunks)]
+
+
+def worker_simulate(payload):
+    (
+        tree, root_genome, root_pool, root_probabilities, root_ids,
+        rf, rt, inv_rate, huge_exp, n_runs, seed,
+        core_fraction, core_protection, core_gene_ids, next_gene_id_start,
+    ) = payload
+    rng = (
+        np.random.default_rng(seed)
+        if seed is not None or root_pool is not None else None
+    )
+    counts = defaultdict(Counter)
+    selected_roots = Counter()
+
+    for _ in range(n_runs):
+        child_seed = int(rng.integers(0, 2**32 - 1)) if rng is not None else None
+        if child_seed is not None:
+            random.seed(child_seed)
+            np.random.seed(child_seed)
+
+        replicate_root = root_genome
+        if root_pool is not None:
+            root_index = int(rng.choice(len(root_pool), p=root_probabilities))
+            replicate_root = root_pool[root_index]
+            selected_roots[root_ids[root_index]] += 1
+        sim_pairs = run_simulation(
+            tree,
+            replicate_root,
+            per_gene_gain_rate=rf,
+            per_gene_loss_rate=rf,
+            per_gene_inv_rate=inv_rate,
+            per_gene_trans_rate=rt,
+            gain_exp=huge_exp,
+            loss_exp=huge_exp,
+            inv_exp=huge_exp,
+            trans_exp=huge_exp,
+            core_fraction=core_fraction,
+            core_protection=core_protection,
+            core_gene_ids=core_gene_ids,
+            next_gene_id_start=next_gene_id_start,
+        )
+        for (a, b), lens in sim_pairs.items():
+            pair = (a, b) if a <= b else (b, a)
+            if lens:
+                counts[pair].update(int(x) for x in lens)
+
+    return counts, selected_roots
+
+
+def merge_counts(partials):
+    merged = defaultdict(Counter)
+    for partial, _ in partials:
+        for pair, counter in partial.items():
+            merged[pair].update(counter)
+    return merged
+
+
+def merge_root_counts(partials):
+    merged = Counter()
+    for _, root_counts in partials:
+        merged.update(root_counts)
+    return merged
+
+
+def observed_root_weights(mode, tree, real_genomes, genome_ids):
+    genomes = {
+        genome_id: convert_to_numeric(real_genomes[genome_id])
+        for genome_id in genome_ids
+    }
+    if mode == "uniform":
+        weights = np.ones(len(genome_ids), dtype=float)
+    elif mode == "medoid_proximity":
+        medoid = observed_medoid_genome_id(real_genomes, genome_ids)
+        medoid_content = set(genomes[medoid])
+        medoid_adjacency = _circular_adjacencies(genomes[medoid])
+        distances = np.asarray([
+            0.5 * (
+                _jaccard_distance(set(genomes[genome_id]), medoid_content)
+                + _jaccard_distance(
+                    _circular_adjacencies(genomes[genome_id]), medoid_adjacency
+                )
+            )
+            for genome_id in genome_ids
+        ])
+        positive = distances[distances > 0]
+        scale = float(np.median(positive)) if len(positive) else 1.0
+        weights = np.exp(-distances / scale)
+    elif mode == "phylogenetic_root":
+        distances = np.asarray([
+            tree.distance(tree.root, next(
+                leaf for leaf in tree.get_terminals() if leaf.name == genome_id
+            ))
+            for genome_id in genome_ids
+        ])
+        positive = distances[distances > 0]
+        scale = float(np.median(positive)) if len(positive) else 1.0
+        weights = np.exp(-distances / scale)
+    else:
+        raise ValueError(f"Unsupported observed-root sampling mode: {mode}")
+    weights /= weights.sum()
+    return genomes, weights
+
+
+def main() -> None:
+    args = parse_args()
+    atgc_dir = os.path.abspath(args.atgc_dir)
+    tree_path = os.path.join(atgc_dir, args.tree_filename)
+    cc_path = os.path.join(atgc_dir, args.cc_filename)
+    os.makedirs(os.path.dirname(os.path.abspath(args.out_csv)), exist_ok=True)
+
+    real_pmfs, tree, real_genomes, med_path = build_real_pmfs(tree_path, cc_path)
+    tree_genome_ids = [
+        leaf.name for leaf in tree.get_terminals() if leaf.name in real_genomes
+    ]
+    root_pool = None
+    root_probabilities = None
+    root_ids = None
+    if args.root_sampling != "none":
+        sampled_genomes, root_probabilities = observed_root_weights(
+            args.root_sampling, tree, real_genomes, tree_genome_ids
+        )
+        root_ids = list(tree_genome_ids)
+        root_pool = [sampled_genomes[genome_id] for genome_id in root_ids]
+        root_genome = root_pool[0]
+        selected_root_genome_id = f"mixture:{args.root_sampling}"
+    elif args.root_genome_file:
+        with open(args.root_genome_file) as handle:
+            root_genome = convert_to_numeric(json.load(handle))
+        if len(root_genome) < 2:
+            raise ValueError("The explicit root-genome file contains fewer than 2 genes")
+        selected_root_genome_id = f"synthetic:{Path(args.root_genome_file).stem}"
+    elif args.root_genome_id:
+        if args.root_genome_id not in tree_genome_ids:
+            raise ValueError(
+                f"Requested root genome {args.root_genome_id!r} is not an "
+                "observed tree genome."
+            )
+        root_genome = convert_to_numeric(real_genomes[args.root_genome_id])
+        selected_root_genome_id = args.root_genome_id
+    else:
+        root_genome = make_root_genome(
+            args.root_mode, tree, cc_path, real_genomes=real_genomes
+        )
+        selected_root_genome_id = (
+            observed_medoid_genome_id(real_genomes, tree_genome_ids)
+            if args.root_mode == "observed_medoid" else ""
+        )
+    all_observed_ids = {
+        gene_id for genome_id in tree_genome_ids for gene_id in real_genomes[genome_id]
+    }
+    next_gene_id_start = max(all_observed_ids, default=0) + 1
+
+    core_gene_ids = None
+    empirical_core_count = 0
+    root_core_count = 0
+    if args.core_mode == "empirical":
+        empirical_ids = empirical_core_gene_ids(
+            real_genomes,
+            genome_ids=tree_genome_ids,
+            min_prevalence=args.core_prevalence,
+        )
+        empirical_core_count = len(empirical_ids)
+        core_gene_ids = empirical_ids.intersection(root_genome)
+        root_core_count = len(core_gene_ids)
+        if root_core_count == 0:
+            raise ValueError(
+                "The empirical core has no COG IDs in the selected root genome. "
+                "Use a root mode with observed COG identities."
+            )
+
+    run_counts = split_counts(args.n_runs, args.workers)
+    seed_rng = np.random.default_rng(args.seed) if args.seed is not None else None
+    payloads = []
+    for n in run_counts:
+        worker_seed = int(seed_rng.integers(0, 2**32 - 1)) if seed_rng is not None else None
+        payloads.append((
+            tree,
+            root_genome,
+            root_pool,
+            root_probabilities,
+            root_ids,
+            args.rf,
+            args.rt,
+            args.inv_rate,
+            args.huge_exp,
+            n,
+            worker_seed,
+            args.core_fraction,
+            args.core_protection,
+            core_gene_ids,
+            next_gene_id_start,
+        ))
+
+    with Pool(processes=len(payloads)) as pool:
+        partials = pool.map(worker_simulate, payloads)
+
+    scores = score_real_vs_sim_counts(real_pmfs, merge_counts(partials))
+    sampled_root_counts = merge_root_counts(partials)
+    dataset = os.path.basename(os.path.normpath(atgc_dir))
+
+    fieldnames = [
+        "dataset", "root_mode", "root_sampling", "selected_root_genome_id",
+        "root_genome_length", "root_sampling_weights", "sampled_root_counts",
+        "next_gene_id_start", "rf", "rt", "inv_rate", "n_runs", "workers",
+        "core_fraction", "core_protection", "core_mode", "core_prevalence",
+        "empirical_core_count", "root_core_count", "root_core_fraction",
+        "sum_w1", "avg_w1", "n_pairs", "skipped_real", "skipped_sim",
+        "composite_score", "avg_singleton_abs_error",
+        "avg_short_cdf_abs_error", "avg_long_tail_abs_error",
+        "avg_kl_real_to_sim", "avg_kl_sim_to_real",
+        "avg_js_divergence", "avg_bhattacharyya_coefficient",
+        "avg_bhattacharyya_distance", "avg_hellinger_distance",
+        "avg_ks_statistic", "avg_kuiper_statistic",
+        "avg_cramer_von_mises_distance", "avg_anderson_darling_distance",
+        "distribution_smoothing_epsilon",
+        "short_cdf_length", "long_tail_length",
+        "composite_w_w1", "composite_w_singleton",
+        "composite_w_short_cdf", "composite_w_long_tail",
+        "median_root_to_leaf", "seed", "tree_path", "cc_path",
+    ]
+    with open(args.out_csv, "w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerow({
+            "dataset": dataset,
+            "root_mode": args.root_mode,
+            "root_sampling": args.root_sampling,
+            "selected_root_genome_id": selected_root_genome_id,
+            "root_genome_length": (
+                f"{np.average([len(genome) for genome in root_pool], weights=root_probabilities):.12g}"
+                if root_pool is not None else len(root_genome)
+            ),
+            "root_sampling_weights": (
+                json.dumps(dict(zip(root_ids, root_probabilities.tolist())), sort_keys=True)
+                if root_pool is not None else ""
+            ),
+            "sampled_root_counts": (
+                json.dumps(dict(sorted(sampled_root_counts.items())))
+                if root_pool is not None else ""
+            ),
+            "next_gene_id_start": next_gene_id_start,
+            "rf": f"{args.rf:.10g}",
+            "rt": f"{args.rt:.10g}",
+            "inv_rate": f"{args.inv_rate:.10g}",
+            "n_runs": args.n_runs,
+            "workers": len(payloads),
+            "core_fraction": f"{args.core_fraction:.10g}",
+            "core_protection": f"{args.core_protection:.10g}",
+            "core_mode": args.core_mode,
+            "core_prevalence": f"{args.core_prevalence:.10g}",
+            "empirical_core_count": empirical_core_count,
+            "root_core_count": root_core_count,
+            "root_core_fraction": f"{root_core_count / len(root_genome):.12g}",
+            "sum_w1": f"{scores['sum_w1']:.12g}",
+            "avg_w1": f"{scores['avg_w1']:.12g}",
+            "n_pairs": scores["n_pairs"],
+            "skipped_real": scores["skipped_real"],
+            "skipped_sim": scores["skipped_sim"],
+            "composite_score": f"{scores['composite_score']:.12g}",
+            "avg_singleton_abs_error": f"{scores['avg_singleton_abs_error']:.12g}",
+            "avg_short_cdf_abs_error": f"{scores['avg_short_cdf_abs_error']:.12g}",
+            "avg_long_tail_abs_error": f"{scores['avg_long_tail_abs_error']:.12g}",
+            "avg_kl_real_to_sim": f"{scores['avg_kl_real_to_sim']:.12g}",
+            "avg_kl_sim_to_real": f"{scores['avg_kl_sim_to_real']:.12g}",
+            "avg_js_divergence": f"{scores['avg_js_divergence']:.12g}",
+            "avg_bhattacharyya_coefficient": f"{scores['avg_bhattacharyya_coefficient']:.12g}",
+            "avg_bhattacharyya_distance": f"{scores['avg_bhattacharyya_distance']:.12g}",
+            "avg_hellinger_distance": f"{scores['avg_hellinger_distance']:.12g}",
+            "avg_ks_statistic": f"{scores['avg_ks_statistic']:.12g}",
+            "avg_kuiper_statistic": f"{scores['avg_kuiper_statistic']:.12g}",
+            "avg_cramer_von_mises_distance": (
+                f"{scores['avg_cramer_von_mises_distance']:.12g}"
+            ),
+            "avg_anderson_darling_distance": (
+                f"{scores['avg_anderson_darling_distance']:.12g}"
+            ),
+            "distribution_smoothing_epsilon": f"{scores['distribution_smoothing_epsilon']:.3g}",
+            "short_cdf_length": scores["short_cdf_length"],
+            "long_tail_length": scores["long_tail_length"],
+            "composite_w_w1": f"{scores['composite_w_w1']:.8g}",
+            "composite_w_singleton": f"{scores['composite_w_singleton']:.8g}",
+            "composite_w_short_cdf": f"{scores['composite_w_short_cdf']:.8g}",
+            "composite_w_long_tail": f"{scores['composite_w_long_tail']:.8g}",
+            "median_root_to_leaf": f"{med_path:.8g}",
+            "seed": "" if args.seed is None else args.seed,
+            "tree_path": tree_path,
+            "cc_path": cc_path,
+        })
+
+    print(
+        f"wrote {args.out_csv}: rf={args.rf:.4g}, rt={args.rt:.4g}, "
+        f"n_runs={args.n_runs}, workers={len(payloads)}, "
+        f"core_mode={args.core_mode}, root_core={root_core_count}, "
+        f"sum_w1={scores['sum_w1']:.4g}, avg_w1={scores['avg_w1']:.4g}, "
+        f"composite={scores['composite_score']:.4g}"
+    )
+
+
+if __name__ == "__main__":
+    main()
