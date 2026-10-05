@@ -266,23 +266,47 @@ def analyze():
     roots, data = load_results()
     FIGURES.mkdir(parents=True, exist_ok=True)
     data.to_csv(FIGURES / "combined_results.csv", index=False)
+    available_metrics = []
+    for metric, label in METRICS:
+        if metric not in data.columns:
+            print(f"Skipping {metric}: column is absent from the result files")
+            continue
+        values = pd.to_numeric(data[metric], errors="coerce").replace(
+            [np.inf, -np.inf], np.nan
+        )
+        if not values.notna().any():
+            print(f"Skipping {metric}: column has no finite values")
+            continue
+        available_metrics.append((metric, label))
+    if not available_metrics:
+        raise SystemExit("No plottable metric columns were found")
     means = data.groupby(
         ["selected_root_genome_id", "rf", "rt"], as_index=False
-    )[[metric for metric, _ in METRICS]].mean()
+    )[[metric for metric, _ in available_metrics]].mean()
     means.to_csv(FIGURES / "mean_results.csv", index=False)
     ncols, nrows = min(3, len(roots)), math.ceil(len(roots) / 3)
     x, y = np.log10(RT_VALUES), np.log10(RF_VALUES)
     xx, yy = np.meshgrid(x, y)
-    for metric, label in METRICS:
+    for metric, label in available_metrics:
         matrices, optima = [], []
         for root in roots.itertuples(index=False):
             root_label = f"synthetic:{root.synthetic_id}"
             subset = means[means["selected_root_genome_id"].eq(root_label)]
-            matrix = subset.pivot(index="rf", columns="rt", values=metric).reindex(
-                index=RF_VALUES, columns=RT_VALUES
-            )
+            finite = pd.to_numeric(subset[metric], errors="coerce").replace(
+                [np.inf, -np.inf], np.nan
+            ).dropna()
+            if finite.empty:
+                raise ValueError(f"{root.synthetic_id}, {metric}: no finite values")
+            matrix = subset.pivot(index="rf", columns="rt", values=metric)
+            matrix = matrix.sort_index().sort_index(axis=1)
+            expected_shape = (len(RF_VALUES), len(RT_VALUES))
+            if matrix.shape != expected_shape:
+                raise ValueError(
+                    f"{root.synthetic_id}, {metric}: expected landscape shape "
+                    f"{expected_shape}, found {matrix.shape}"
+                )
             matrices.append(matrix.to_numpy())
-            optima.append(subset.loc[subset[metric].idxmin()])
+            optima.append(subset.loc[finite.idxmin()])
         all_values = np.concatenate([matrix.ravel() for matrix in matrices])
         norm = Normalize(float(np.nanmin(all_values)), float(np.nanmax(all_values)))
         levels = np.linspace(norm.vmin, norm.vmax, 18)
